@@ -64,7 +64,7 @@ def _load_model():
         _model = build_light_cough_cnn()
         _model = load_checkpoint(_model, _MODEL_PATH)
         _model.eval()
-        print(f"[cough_agent] Model loaded ← {_MODEL_PATH}")
+        print(f"[cough_agent] Model loaded <- {_MODEL_PATH}")
     return _model
 
 

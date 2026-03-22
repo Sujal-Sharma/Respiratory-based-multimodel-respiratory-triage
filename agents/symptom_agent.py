@@ -27,7 +27,7 @@ def _load_model():
             )
         with open(_MODEL_PATH, 'rb') as f:
             _model = pickle.load(f)
-        print(f"[symptom_agent] Model loaded ← {_MODEL_PATH}")
+        print(f"[symptom_agent] Model loaded <- {_MODEL_PATH}")
     return _model
 
 
@@ -75,7 +75,7 @@ def predict_symptom(
     def _bool(v):
         return 1.0 if v else 0.0
 
-    features = np.array([[
+    meta = [
         age_norm,
         gender_enc,
         _bool(fever_muscle_pain),
@@ -84,7 +84,11 @@ def predict_symptom(
         _bool(dyspnea),
         _bool(wheezing),
         _bool(congestion),
-    ]], dtype=np.float32)
+    ]
+    # XGBoost was trained on 168 features (8 meta + 160 MFCC).
+    # When called without audio, pad MFCC columns with zeros.
+    mfcc_pad = [0.0] * 160
+    features = np.array([meta + mfcc_pad], dtype=np.float32)
 
     proba     = model.predict_proba(features)[0]
     label_int = int(np.argmax(proba))

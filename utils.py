@@ -114,7 +114,7 @@ def save_checkpoint(
         'model_state_dict':     model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
     }, path)
-    print(f"[utils] Checkpoint saved → {path}  (epoch={epoch}, val_acc={val_acc:.4f})")
+    print(f"[utils] Checkpoint saved -> {path}  (epoch={epoch}, val_acc={val_acc:.4f})")
 
 
 def load_checkpoint(model: torch.nn.Module, path: str) -> torch.nn.Module:
@@ -125,5 +125,5 @@ def load_checkpoint(model: torch.nn.Module, path: str) -> torch.nn.Module:
     model.load_state_dict(checkpoint['model_state_dict'])
     epoch   = checkpoint.get('epoch', '?')
     val_acc = checkpoint.get('val_acc', '?')
-    print(f"[utils] Checkpoint loaded ← {path}  (epoch={epoch}, val_acc={val_acc})")
+    print(f"[utils] Checkpoint loaded <- {path}  (epoch={epoch}, val_acc={val_acc})")
     return model
