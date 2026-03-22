@@ -1,0 +1,26 @@
+# Datasets (too large for GitHub)
+DATASET/
+data/
+saved_models/
+
+# Virtual environment
+triage_env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Outputs (generated, reproducible)
+outputs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Environment variables
+.env
