@@ -1,0 +1,13 @@
+Model: multitask_disease
+
+               precision    recall  f1-score   support
+
+       Normal     0.7458    0.8462    0.7928        52
+         COPD     0.9866    0.9517    0.9688       848
+    Pneumonia     0.5238    0.7674    0.6226        43
+       Asthma     0.4286    0.7500    0.5455         4
+Heart_Failure     1.0000    1.0000    1.0000         1
+
+     accuracy                         0.9367       948
+    macro avg     0.7369    0.8630    0.7859       948
+ weighted avg     0.9500    0.9367    0.9417       948

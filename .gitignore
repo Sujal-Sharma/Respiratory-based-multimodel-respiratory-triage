@@ -1,6 +1,13 @@
-# Datasets (too large for GitHub)
+# Raw datasets (too large for GitHub)
 DATASET/
-data/
+
+# Spectrogram .npy files (generated, too large)
+data/spectrograms/
+data/coughvid_spectrograms/
+data/mfccs/
+data/_tmp_audio/
+
+# Saved model weights (too large)
 saved_models/
 
 # Virtual environment
@@ -10,9 +17,6 @@ triage_env/
 __pycache__/
 *.pyc
 *.pyo
-
-# Outputs (generated, reproducible)
-outputs/
 
 # IDE
 .vscode/
