@@ -17,7 +17,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torch.amp import autocast, GradScaler
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.feature_selection import mutual_info_classif
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 from config import (
     DEVICE, BATCH_SIZE, WEIGHT_DECAY, PATIENCE,
@@ -25,6 +27,7 @@ from config import (
     MULTITASK_LABELS_CSV, SAVED_MODELS_DIR, OUTPUTS_DIR,
     NUM_DISEASE_CLASSES, NUM_SOUND_CLASSES,
 )
+
 from models.cnn_model import (
     build_multitask_efficientnet,
     build_light_cough_cnn,
@@ -45,71 +48,198 @@ os.makedirs(SAVED_MODELS_DIR, exist_ok=True)
 # COUGHVID — XGBoost Training
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _build_audio_col_names():
+    """Build the v2 audio feature column names (256 features)."""
+    n_mfcc = 13
+    return (
+        [f'mfcc_{s}_{i}' for s in ['mean','std','max','min'] for i in range(n_mfcc)] +
+        [f'delta_{s}_{i}' for s in ['mean','std','max','min'] for i in range(n_mfcc)] +
+        [f'delta2_{s}_{i}' for s in ['mean','std','max','min'] for i in range(n_mfcc)] +
+        [f'spec_centroid_{s}' for s in ['mean','std','max','min']] +
+        [f'spec_bandwidth_{s}' for s in ['mean','std','max','min']] +
+        [f'spec_contrast_{s}_{i}' for s in ['mean','std','max','min'] for i in range(7)] +
+        [f'spec_rolloff_{s}' for s in ['mean','std','max','min']] +
+        [f'spec_flatness_{s}' for s in ['mean','std','max','min']] +
+        [f'zcr_{s}' for s in ['mean','std','max','min']] +
+        [f'rms_{s}' for s in ['mean','std','max','min']] +
+        [f'chroma_{s}_{i}' for s in ['mean','std','max','min'] for i in range(12)]
+    )
+
+
 def train_xgboost():
     """
-    Train XGBoost on COUGHVID metadata + MFCC features (GPU-accelerated).
+    Train XGBoost on COUGHVID metadata + comprehensive audio features.
+
+    Based on Pahar (2022), Mohammed (2023), Chaudhari (2022):
+      - 264 features (8 metadata + 256 audio) with 1:1 balanced classes
+      - Mutual-information feature selection (top 80 features)
+      - Stratified 5-fold CV for reliable evaluation
+      - Optimal threshold tuning on validation set (maximise Macro F1)
+      - No SMOTE needed — preprocessing already balances 1:1
 
     Returns
     -------
     model     : trained XGBClassifier
-    X_test    : np.ndarray
+    X_test    : np.ndarray  (selected features only)
     y_test    : np.ndarray
     label_map : dict {class_name: int}
     """
-    print("\n" + "═" * 60)
-    print("TRAINING — XGBoost on COUGHVID")
-    print("═" * 60)
+    print("\n" + "=" * 60)
+    print("TRAINING -- XGBoost on COUGHVID (literature-optimised)")
+    print("=" * 60)
     set_seed(42)
 
+    # ── Load features ────────────────────────────────────────────
     META_COLS = [
         'age_norm', 'gender_enc', 'fever_muscle_pain_enc',
         'resp_cond_enc', 'cough_score',
         'dyspnea_enc', 'wheezing_enc', 'congestion_enc'
     ]
-    MFCC_COLS = (
-        [f'mfcc_mean_{i}'  for i in range(40)] +
-        [f'mfcc_std_{i}'   for i in range(40)] +
-        [f'delta_mean_{i}' for i in range(40)] +
-        [f'delta_std_{i}'  for i in range(40)]
-    )
-    FEATURE_COLS = META_COLS + MFCC_COLS   # 8 metadata + 160 MFCC = 168 total
 
     if os.path.exists(COUGHVID_LABELS_CSV):
         print(f"Loading preprocessed features from {COUGHVID_LABELS_CSV}")
-        df   = pd.read_csv(COUGHVID_LABELS_CSV)
+        df = pd.read_csv(COUGHVID_LABELS_CSV)
+
+        AUDIO_COLS = _build_audio_col_names()
+
+        FEATURE_COLS = META_COLS + AUDIO_COLS
         cols = [c for c in FEATURE_COLS if c in df.columns]
         X    = df[cols].values.astype(np.float32)
         y    = df['label'].values.astype(np.int32)
+        feature_names = cols
         label_map = {cls: i for i, cls in enumerate(COUGHVID_CLASSES)}
-        print(f"  Features loaded: {X.shape}  ({len(cols)} cols found)")
+        print(f"  Features loaded: {X.shape}  ({len(cols)} cols)")
     else:
         X, y, label_map = preprocess_coughvid()
+        feature_names = [f'feat_{i}' for i in range(X.shape[1])]
 
-    print(f"Feature matrix: {X.shape} | Labels: {np.unique(y, return_counts=True)}")
+    # ── Sanity checks ────────────────────────────────────────────
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    counts = np.bincount(y)
+    print(f"Feature matrix: {X.shape}")
+    print(f"Class distribution: Healthy={counts[0]:,}  Symptomatic={counts[1]:,}  ratio={counts[0]/max(counts[1],1):.2f}")
 
-    # 70 / 15 / 15 stratified split
-    X_tv,   X_test,  y_tv,   y_test  = train_test_split(X, y, test_size=0.15, stratify=y, random_state=42)
-    X_train, X_val,  y_train, y_val  = train_test_split(X_tv, y_tv, test_size=0.15/0.85, stratify=y_tv, random_state=42)
-    print(f"Train: {len(X_train):,}  Val: {len(X_val):,}  Test: {len(X_test):,}")
+    # ── Hold out 15% test set (never touched during training) ────
+    X_dev, X_test, y_dev, y_test = train_test_split(
+        X, y, test_size=0.15, stratify=y, random_state=42
+    )
+    print(f"Dev: {len(X_dev):,}  Test: {len(X_test):,}")
 
-    model = build_xgboost(num_classes=len(label_map))
-    print("\nTraining XGBoost (CUDA) …")
+    # ── Feature selection via mutual information ─────────────────
+    N_SELECT = min(80, X_dev.shape[1])
+    print(f"\nFeature selection: mutual information -> top {N_SELECT} features")
+    mi_scores = mutual_info_classif(X_dev, y_dev, random_state=42, n_neighbors=5)
+    top_idx   = np.argsort(mi_scores)[::-1][:N_SELECT]
+    top_idx   = np.sort(top_idx)  # keep original order
 
-    model.fit(
-        X_train, y_train,
-        eval_set=[(X_train, y_train), (X_val, y_val)],
+    selected_names = [feature_names[i] for i in top_idx]
+    top10 = [feature_names[i] for i in np.argsort(mi_scores)[::-1][:10]]
+    print(f"  Top 10: {top10}")
+
+    X_dev_sel  = X_dev[:, top_idx]
+    X_test_sel = X_test[:, top_idx]
+
+    # ── Stratified 5-Fold Cross-Validation ───────────────────────
+    N_FOLDS = 5
+    skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
+
+    fold_accs, fold_f1s, fold_aucs = [], [], []
+    fold_thresholds = []
+    print(f"\n{'='*60}")
+    print(f"Stratified {N_FOLDS}-Fold Cross-Validation")
+    print(f"{'='*60}")
+
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X_dev_sel, y_dev), 1):
+        X_tr, X_vl = X_dev_sel[train_idx], X_dev_sel[val_idx]
+        y_tr, y_vl = y_dev[train_idx], y_dev[val_idx]
+
+        model = build_xgboost(num_classes=len(label_map))
+        model.fit(X_tr, y_tr, eval_set=[(X_vl, y_vl)], verbose=0)
+
+        y_proba = model.predict_proba(X_vl)[:, 1]
+
+        # Find optimal threshold that maximises Macro F1
+        best_thr, best_f1 = 0.5, 0.0
+        for thr in np.arange(0.30, 0.70, 0.01):
+            y_pred_t = (y_proba >= thr).astype(int)
+            f1_t = f1_score(y_vl, y_pred_t, average='macro')
+            if f1_t > best_f1:
+                best_f1, best_thr = f1_t, thr
+
+        y_pred = (y_proba >= best_thr).astype(int)
+        acc = accuracy_score(y_vl, y_pred)
+        auc = roc_auc_score(y_vl, y_proba)
+
+        fold_accs.append(acc)
+        fold_f1s.append(best_f1)
+        fold_aucs.append(auc)
+        fold_thresholds.append(best_thr)
+        print(f"  Fold {fold}: Acc={acc:.4f}  F1={best_f1:.4f}  AUROC={auc:.4f}  thr={best_thr:.2f}")
+
+    mean_acc = np.mean(fold_accs)
+    mean_f1  = np.mean(fold_f1s)
+    mean_auc = np.mean(fold_aucs)
+    opt_threshold = float(np.mean(fold_thresholds))
+    print(f"\n  CV Mean:  Acc={mean_acc:.4f} +/- {np.std(fold_accs):.4f}")
+    print(f"            F1 ={mean_f1:.4f} +/- {np.std(fold_f1s):.4f}")
+    print(f"            AUC={mean_auc:.4f} +/- {np.std(fold_aucs):.4f}")
+    print(f"  Optimal threshold: {opt_threshold:.3f} (avg across folds)")
+
+    # ── Final model: train on 90% dev, validate on 10% ───────────
+    print(f"\nTraining final model on dev set ({len(X_dev_sel):,} samples)...")
+    X_fin_tr, X_fin_vl, y_fin_tr, y_fin_vl = train_test_split(
+        X_dev_sel, y_dev, test_size=0.1, stratify=y_dev, random_state=42
+    )
+
+    final_model = build_xgboost(num_classes=len(label_map))
+    final_model.fit(
+        X_fin_tr, y_fin_tr,
+        eval_set=[(X_fin_vl, y_fin_vl)],
         verbose=50,
     )
 
-    save_path = os.path.join(SAVED_MODELS_DIR, "xgboost_coughvid.pkl")
-    with open(save_path, 'wb') as f:
-        pickle.dump(model, f)
-    print(f"Model saved → {save_path}")
+    # ── Evaluate on held-out test set with optimal threshold ─────
+    y_test_proba = final_model.predict_proba(X_test_sel)[:, 1]
+    y_test_pred  = (y_test_proba >= opt_threshold).astype(int)
 
-    val_acc = np.mean(model.predict(X_val) == y_val)
-    print(f"Validation accuracy: {val_acc:.4f}")
-    print("═" * 60)
-    return model, X_test, y_test, label_map
+    test_acc = accuracy_score(y_test, y_test_pred)
+    test_f1  = f1_score(y_test, y_test_pred, average='macro')
+    test_auc = roc_auc_score(y_test, y_test_proba)
+
+    from sklearn.metrics import recall_score
+    rec_healthy = recall_score(y_test, y_test_pred, pos_label=0)
+    rec_sympt   = recall_score(y_test, y_test_pred, pos_label=1)
+
+    print(f"\n{'='*60}")
+    print(f"TEST SET RESULTS (threshold={opt_threshold:.3f})")
+    print(f"  Accuracy          : {test_acc:.4f}")
+    print(f"  Macro F1          : {test_f1:.4f}")
+    print(f"  AUROC             : {test_auc:.4f}")
+    print(f"  Healthy recall    : {rec_healthy:.4f}")
+    print(f"  Symptomatic recall: {rec_sympt:.4f}")
+    print(f"{'='*60}")
+
+    # ── Save model + metadata ────────────────────────────────────
+    save_path = os.path.join(SAVED_MODELS_DIR, "xgboost_coughvid.pkl")
+    save_data = {
+        'model':          final_model,
+        'selected_idx':   top_idx,
+        'threshold':      opt_threshold,
+        'feature_names':  selected_names,
+        'all_feature_names': feature_names,
+        'cv_results': {
+            'accuracy': fold_accs, 'f1': fold_f1s, 'auroc': fold_aucs,
+            'mean_acc': mean_acc, 'mean_f1': mean_f1, 'mean_auc': mean_auc,
+        },
+        'test_results': {
+            'accuracy': test_acc, 'f1': test_f1, 'auroc': test_auc,
+        },
+    }
+    with open(save_path, 'wb') as f:
+        pickle.dump(save_data, f)
+    print(f"Model + metadata saved -> {save_path}")
+    print("=" * 60)
+    return final_model, X_test_sel, y_test, label_map
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -644,11 +774,21 @@ def train_coughvid_efficientnet():
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Step 1a: XGBoost (COUGHVID — metadata + MFCC features, fast baseline)
-    xgb_model, X_test, y_test, xgb_label_map = train_xgboost()
+    import sys
 
-    # Step 1b: LightCoughCNN (COUGHVID — mel spectrograms, no pre-emphasis)
-    cough_model, df_cough_test = train_coughvid_efficientnet()
+    # Usage:
+    #   python training.py              — train XGBoost only (default)
+    #   python training.py all          — train XGBoost + LightCoughCNN
+    #   python training.py cough        — train LightCoughCNN only
+    #   python training.py multitask    — train MultiTaskEfficientNet only
 
-    # Step 2: MultiTask EfficientNet (lung) — uncomment to retrain
-    # mt_model, df_test = train_multitask_efficientnet()
+    mode = sys.argv[1].lower() if len(sys.argv) > 1 else "xgboost"
+
+    if mode in ("xgboost", "all"):
+        xgb_model, X_test, y_test, xgb_label_map = train_xgboost()
+
+    if mode in ("cough", "all"):
+        cough_model, df_cough_test = train_coughvid_efficientnet()
+
+    if mode == "multitask":
+        mt_model, df_test = train_multitask_efficientnet()

@@ -2,9 +2,9 @@ Model: xgboost
 
               precision    recall  f1-score   support
 
-     Healthy     0.5422    0.6000    0.5696       150
- Symptomatic     0.5522    0.4933    0.5211       150
+     Healthy     0.6750    0.8832    0.7652       214
+ Symptomatic     0.8299    0.5728    0.6778       213
 
-    accuracy                         0.5467       300
-   macro avg     0.5472    0.5467    0.5454       300
-weighted avg     0.5472    0.5467    0.5454       300
+    accuracy                         0.7283       427
+   macro avg     0.7525    0.7280    0.7215       427
+weighted avg     0.7523    0.7283    0.7216       427

@@ -6,6 +6,7 @@ data/spectrograms/
 data/coughvid_spectrograms/
 data/mfccs/
 data/_tmp_audio/
+data/.cache/
 
 # Saved model weights (too large)
 saved_models/
@@ -28,3 +29,6 @@ Thumbs.db
 
 # Environment variables
 .env
+
+# Build artifacts
+.dist/

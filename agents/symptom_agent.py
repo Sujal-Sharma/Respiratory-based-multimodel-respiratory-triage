@@ -4,21 +4,25 @@ agents/symptom_agent.py — XGBoost inference wrapper for COUGHVID.
 This agent receives patient metadata and returns:
   - predicted class label
   - confidence probabilities
-  - structured result dict for the LangGraph pipeline (Phase 3)
+  - structured result dict for the LangGraph pipeline
+
+Model format: dict with model + feature selection indices + threshold.
 """
 
 import os
 import pickle
 import numpy as np
-from config import SAVED_MODELS_DIR, COUGHVID_CLASSES
+from config import SAVED_MODELS_DIR, COUGHVID_CLASSES, XGB_N_AUDIO_FEATURES
 
-_MODEL_PATH = os.path.join(SAVED_MODELS_DIR, "xgboost_coughvid.pkl")
-_model      = None   # lazy-loaded singleton
+_MODEL_PATH   = os.path.join(SAVED_MODELS_DIR, "xgboost_coughvid.pkl")
+_model        = None   # lazy-loaded singleton
+_selected_idx = None   # feature selection indices
+_threshold    = 0.5    # classification threshold (tuned during training)
 
 
 def _load_model():
     """Load XGBoost model from disk (once)."""
-    global _model
+    global _model, _selected_idx, _threshold
     if _model is None:
         if not os.path.exists(_MODEL_PATH):
             raise FileNotFoundError(
@@ -26,8 +30,14 @@ def _load_model():
                 "Run training.train_xgboost() first."
             )
         with open(_MODEL_PATH, 'rb') as f:
-            _model = pickle.load(f)
-        print(f"[symptom_agent] Model loaded <- {_MODEL_PATH}")
+            data = pickle.load(f)
+
+        _model        = data['model']
+        _selected_idx = data.get('selected_idx', None)
+        _threshold    = data.get('threshold', 0.5)
+        n_sel = len(_selected_idx) if _selected_idx is not None else '?'
+        print(f"[symptom_agent] model loaded <- {_MODEL_PATH}")
+        print(f"  {n_sel} selected features, threshold={_threshold:.3f}")
     return _model
 
 
@@ -42,33 +52,20 @@ def predict_symptom(
     congestion: bool = False
 ) -> dict:
     """
-    Predict COVID-19 / healthy / symptomatic from patient metadata.
+    Predict Healthy / Symptomatic from patient metadata.
 
-    Parameters
-    ----------
-    age                   : patient age (years)
-    gender                : 'male' | 'female' | 'unknown'
-    fever_muscle_pain     : True/False
-    respiratory_condition : True/False
-    cough_detected        : cough detection confidence score 0–1
-    dyspnea               : difficulty breathing True/False
-    wheezing              : True/False
-    congestion            : True/False
+    When called from the pipeline (without audio), audio features are
+    zero-padded. Metadata alone gives ~51% confidence -- acts as
+    supplementary signal, not primary classifier.
 
     Returns
     -------
-    dict with:
-      'label'       : predicted class string (e.g. 'COVID-19')
-      'label_int'   : integer label
-      'confidence'  : confidence of top prediction (0–1)
-      'probabilities': dict {class: prob}
-      'agent'       : 'symptom_agent'
+    dict with label, label_int, confidence, probabilities, agent
     """
     model = _load_model()
 
-    # Encode features (same as preprocessing.py)
-    age_norm  = min(float(age), 100.0) / 100.0
-
+    # Encode metadata (same order as preprocessing.py)
+    age_norm   = min(float(age), 100.0) / 100.0
     gender_map = {'male': 0.0, 'female': 1.0}
     gender_enc = gender_map.get(str(gender).strip().lower(), 0.5)
 
@@ -85,14 +82,26 @@ def predict_symptom(
         _bool(wheezing),
         _bool(congestion),
     ]
-    # XGBoost was trained on 168 features (8 meta + 160 MFCC).
-    # When called without audio, pad MFCC columns with zeros.
-    mfcc_pad = [0.0] * 160
-    features = np.array([meta + mfcc_pad], dtype=np.float32)
 
-    proba     = model.predict_proba(features)[0]
-    label_int = int(np.argmax(proba))
-    label     = COUGHVID_CLASSES[label_int]
+    # Zero-pad audio features (no audio available in pipeline mode)
+    audio_pad = [0.0] * XGB_N_AUDIO_FEATURES  # 256
+
+    full_features = np.array([meta + audio_pad], dtype=np.float32)
+
+    # Apply feature selection
+    if _selected_idx is not None:
+        full_features = full_features[:, _selected_idx]
+
+    proba = model.predict_proba(full_features)[0]
+
+    # Apply optimised threshold (tuned to maximise Macro F1)
+    # proba[1] = P(Symptomatic)
+    if proba[1] >= _threshold:
+        label_int = 1
+    else:
+        label_int = 0
+
+    label      = COUGHVID_CLASSES[label_int]
     confidence = float(proba[label_int])
 
     return {
@@ -107,17 +116,27 @@ def predict_symptom(
 
 def predict_from_array(features: np.ndarray) -> dict:
     """
-    Predict from a pre-encoded feature array of shape (8,) or (1, 8).
-    Useful for batch inference or evaluation replay.
+    Predict from a pre-encoded feature array (full 264-feature vector).
+    Feature selection is applied automatically.
     """
     model = _load_model()
 
     if features.ndim == 1:
         features = features.reshape(1, -1)
+    features = features.astype(np.float32)
 
-    proba     = model.predict_proba(features.astype(np.float32))[0]
-    label_int = int(np.argmax(proba))
-    label     = COUGHVID_CLASSES[label_int]
+    # Apply feature selection
+    if _selected_idx is not None:
+        features = features[:, _selected_idx]
+
+    proba = model.predict_proba(features)[0]
+
+    if proba[1] >= _threshold:
+        label_int = 1
+    else:
+        label_int = 0
+
+    label = COUGHVID_CLASSES[label_int]
 
     return {
         'label':         label,
@@ -130,7 +149,6 @@ def predict_from_array(features: np.ndarray) -> dict:
 
 
 if __name__ == "__main__":
-    # Example inference
     result = predict_symptom(
         age=45,
         gender='male',

@@ -1,5 +1,10 @@
 """
-models/xgboost_model.py — XGBoost classifier configuration for COUGHVID metadata.
+models/xgboost_model.py — XGBoost classifier for COUGHVID cough classification.
+
+Hyperparameters tuned per literature consensus:
+  - Pahar et al. (2022): XGBoost on COUGHVID, 74-78% accuracy
+  - Mohammed et al. (2023): Stacking ensemble, 78-82% accuracy
+  - Lower LR (0.05) + more estimators (500) + deeper trees (8) for richer feature set
 """
 
 from xgboost import XGBClassifier
@@ -8,16 +13,15 @@ from config import (
 )
 
 
-def build_xgboost(num_classes: int = None) -> XGBClassifier:
+def build_xgboost(num_classes: int = None,
+                   scale_pos_weight: float = 1.0) -> XGBClassifier:
     """
     Build and return a configured XGBClassifier.
 
-    Uses GPU (device='cuda') with histogram method for fast training.
-    Early stopping must be set during model.fit() call.
-
     Parameters
     ----------
-    num_classes : int  — number of target classes (default: len(COUGHVID_CLASSES))
+    num_classes       : int   — number of target classes (default: len(COUGHVID_CLASSES))
+    scale_pos_weight  : float — weight for positive class (handles imbalance)
 
     Returns
     -------
@@ -26,14 +30,12 @@ def build_xgboost(num_classes: int = None) -> XGBClassifier:
     if num_classes is None:
         num_classes = len(COUGHVID_CLASSES)
 
-    # Binary classification (2 classes: Healthy vs Symptomatic)
-    # use binary:logistic; multi:softprob requires num_class≥3
     if num_classes == 2:
-        objective  = 'binary:logistic'
+        objective   = 'binary:logistic'
         eval_metric = 'logloss'
-        extra_kw    = {}
+        extra_kw    = {'scale_pos_weight': scale_pos_weight}
     else:
-        objective  = 'multi:softprob'
+        objective   = 'multi:softprob'
         eval_metric = 'mlogloss'
         extra_kw    = {'num_class': num_classes}
 
@@ -41,14 +43,15 @@ def build_xgboost(num_classes: int = None) -> XGBClassifier:
         n_estimators          = XGB_N_ESTIMATORS,
         max_depth             = XGB_MAX_DEPTH,
         learning_rate         = XGB_LEARNING_RATE,
-        subsample             = 0.85,
-        colsample_bytree      = 0.85,
-        min_child_weight      = 3,
-        gamma                 = 0.1,
-        reg_alpha             = 0.05,
-        reg_lambda            = 1.0,
+        subsample             = 0.8,
+        colsample_bytree      = 0.8,
+        colsample_bylevel     = 0.8,
+        min_child_weight      = 5,
+        gamma                 = 0.2,
+        reg_alpha             = 0.1,
+        reg_lambda            = 1.5,
         eval_metric           = eval_metric,
-        early_stopping_rounds = 20,
+        early_stopping_rounds = 30,
         tree_method           = 'hist',
         device                = 'cuda',
         random_state          = 42,
@@ -59,9 +62,8 @@ def build_xgboost(num_classes: int = None) -> XGBClassifier:
     )
 
     print(f"[xgboost_model] XGBClassifier built for {num_classes} classes")
-    print(f"  n_estimators = {XGB_N_ESTIMATORS}")
-    print(f"  max_depth    = {XGB_MAX_DEPTH}")
-    print(f"  learning_rate= {XGB_LEARNING_RATE}")
+    print(f"  n_estimators = {XGB_N_ESTIMATORS}, max_depth = {XGB_MAX_DEPTH}")
+    print(f"  learning_rate= {XGB_LEARNING_RATE}, scale_pos_weight= {scale_pos_weight}")
     print(f"  device       = cuda (GPU)")
     return model
 

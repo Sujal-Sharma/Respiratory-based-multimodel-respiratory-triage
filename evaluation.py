@@ -174,16 +174,19 @@ def _metrics_summary(y_true, y_pred, proba, class_names, model_name):
 # XGBoost evaluation
 # ══════════════════════════════════════════════════════════════════════════════
 
-def evaluate_xgboost(model, X_test: np.ndarray, y_test: np.ndarray) -> dict:
-    print("\n" + "═" * 60)
-    print("EVALUATION — XGBoost (COUGHVID)")
-    print("═" * 60)
+def evaluate_xgboost(model, X_test: np.ndarray, y_test: np.ndarray,
+                      threshold: float = 0.5) -> dict:
+    print("\n" + "=" * 60)
+    print(f"EVALUATION -- XGBoost (COUGHVID)  threshold={threshold:.3f}")
+    print("=" * 60)
 
     proba  = model.predict_proba(X_test)
-    # Binary XGBoost returns shape (N,) for positive class — expand to (N, 2)
+    # Binary XGBoost returns shape (N,) for positive class -- expand to (N, 2)
     if proba.ndim == 1 or proba.shape[1] == 1:
         proba = np.column_stack([1 - proba.ravel(), proba.ravel()])
-    y_pred = np.argmax(proba, axis=1)
+
+    # Apply tuned threshold instead of default 0.5
+    y_pred = (proba[:, 1] >= threshold).astype(int)
 
     _plot_confusion_matrix(y_test, y_pred, COUGHVID_CLASSES, 'xgboost')
     _print_and_save_report(y_test, y_pred, COUGHVID_CLASSES, 'xgboost')
@@ -354,76 +357,108 @@ def save_comparison_table(metrics_list: list) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import sys
     from training import train_xgboost, train_multitask_efficientnet, train_coughvid_efficientnet
+
+    # Usage:
+    #   python evaluation.py            — evaluate all available models (default)
+    #   python evaluation.py xgboost    — evaluate XGBoost only
+    #   python evaluation.py cough      — evaluate LightCoughCNN only
+    #   python evaluation.py multitask  — evaluate MultiTaskEfficientNet only
+
+    mode = sys.argv[1].lower() if len(sys.argv) > 1 else "all"
 
     metrics_all = []
 
     # ── XGBoost ───────────────────────────────────────────────────
     xgb_path = os.path.join(SAVED_MODELS_DIR, "xgboost_coughvid.pkl")
-    if os.path.exists(xgb_path):
-        print("[evaluation] Loading saved XGBoost model …")
+    if mode in ("all", "xgboost") and os.path.exists(xgb_path):
+        print("[evaluation] Loading saved XGBoost model ...")
         with open(xgb_path, 'rb') as f:
-            xgb_model = pickle.load(f)
+            data = pickle.load(f)
+
+        xgb_model     = data['model']
+        selected_idx  = data.get('selected_idx', None)
+        xgb_threshold = data.get('threshold', 0.5)
+
         df_cv      = pd.read_csv(COUGHVID_LABELS_CSV)
         meta_cols  = ['age_norm', 'gender_enc', 'fever_muscle_pain_enc',
                        'resp_cond_enc', 'cough_score',
                        'dyspnea_enc', 'wheezing_enc', 'congestion_enc']
-        mfcc_cols  = ([f'mfcc_mean_{i}'  for i in range(40)] +
-                      [f'mfcc_std_{i}'   for i in range(40)] +
-                      [f'delta_mean_{i}' for i in range(40)] +
-                      [f'delta_std_{i}'  for i in range(40)])
-        feat_cols  = [c for c in meta_cols + mfcc_cols if c in df_cv.columns]
+
+        n_mfcc = 13
+        audio_cols = (
+            [f'mfcc_{s}_{i}' for s in ['mean','std','max','min'] for i in range(n_mfcc)] +
+            [f'delta_{s}_{i}' for s in ['mean','std','max','min'] for i in range(n_mfcc)] +
+            [f'delta2_{s}_{i}' for s in ['mean','std','max','min'] for i in range(n_mfcc)] +
+            [f'spec_centroid_{s}' for s in ['mean','std','max','min']] +
+            [f'spec_bandwidth_{s}' for s in ['mean','std','max','min']] +
+            [f'spec_contrast_{s}_{i}' for s in ['mean','std','max','min'] for i in range(7)] +
+            [f'spec_rolloff_{s}' for s in ['mean','std','max','min']] +
+            [f'spec_flatness_{s}' for s in ['mean','std','max','min']] +
+            [f'zcr_{s}' for s in ['mean','std','max','min']] +
+            [f'rms_{s}' for s in ['mean','std','max','min']] +
+            [f'chroma_{s}_{i}' for s in ['mean','std','max','min'] for i in range(12)]
+        )
+
+        feat_cols = [c for c in meta_cols + audio_cols if c in df_cv.columns]
         X = df_cv[feat_cols].values.astype(np.float32)
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
         y = df_cv['label'].values.astype(np.int32)
         _, X_test, _, y_test = train_test_split(
             X, y, test_size=0.15, stratify=y, random_state=42
         )
-        metrics_xgb = evaluate_xgboost(xgb_model, X_test, y_test)
-    else:
-        print("[evaluation] XGBoost not found — training …")
+        # Apply feature selection if v2
+        if selected_idx is not None:
+            X_test = X_test[:, selected_idx]
+        metrics_xgb = evaluate_xgboost(xgb_model, X_test, y_test, threshold=xgb_threshold)
+        metrics_all.append(metrics_xgb)
+    elif mode in ("all", "xgboost"):
+        print("[evaluation] XGBoost not found -- training ...")
         xgb_model, X_test, y_test, _ = train_xgboost()
         metrics_xgb = evaluate_xgboost(xgb_model, X_test, y_test)
-    metrics_all.append(metrics_xgb)
+        metrics_all.append(metrics_xgb)
 
     # ── COUGHVID EfficientNet ──────────────────────────────────────
-    cough_path = os.path.join(SAVED_MODELS_DIR, "coughvid_efficientnet.pt")
-    if os.path.exists(cough_path):
-        print("\n[evaluation] Loading saved COUGHVID EfficientNet …")
-        cough_model = build_light_cough_cnn()
-        cough_model = load_checkpoint(cough_model, cough_path)
-        df_cough    = pd.read_csv(COUGHVID_SPEC_LABELS_CSV)
-        df_cough    = df_cough[df_cough['spec_path'].apply(os.path.exists)].reset_index(drop=True)
-        y_cough     = df_cough['label'].values
-        _, idx_cough_test = train_test_split(
-            np.arange(len(df_cough)), test_size=0.15, stratify=y_cough, random_state=42
-        )
-        df_cough_test = df_cough.iloc[idx_cough_test].reset_index(drop=True)
-    else:
-        print("\n[evaluation] COUGHVID EfficientNet not found — training …")
-        cough_model, df_cough_test = train_coughvid_efficientnet()
-    metrics_cough_eff = evaluate_coughvid_efficientnet(cough_model, df_cough_test)
-    metrics_all.append(metrics_cough_eff)
+    if mode in ("all", "cough"):
+        cough_path = os.path.join(SAVED_MODELS_DIR, "coughvid_efficientnet.pt")
+        if os.path.exists(cough_path):
+            print("\n[evaluation] Loading saved COUGHVID EfficientNet ...")
+            cough_model = build_light_cough_cnn()
+            cough_model = load_checkpoint(cough_model, cough_path)
+            df_cough    = pd.read_csv(COUGHVID_SPEC_LABELS_CSV)
+            df_cough    = df_cough[df_cough['spec_path'].apply(os.path.exists)].reset_index(drop=True)
+            y_cough     = df_cough['label'].values
+            _, idx_cough_test = train_test_split(
+                np.arange(len(df_cough)), test_size=0.15, stratify=y_cough, random_state=42
+            )
+            df_cough_test = df_cough.iloc[idx_cough_test].reset_index(drop=True)
+        else:
+            print("\n[evaluation] COUGHVID EfficientNet not found -- training ...")
+            cough_model, df_cough_test = train_coughvid_efficientnet()
+        metrics_cough_eff = evaluate_coughvid_efficientnet(cough_model, df_cough_test)
+        metrics_all.append(metrics_cough_eff)
 
     # ── MultiTask EfficientNet ─────────────────────────────────────
-    mt_path = os.path.join(SAVED_MODELS_DIR, "multitask_efficientnet.pt")
-    if os.path.exists(mt_path):
-        print("\n[evaluation] Loading saved MultiTask EfficientNet …")
-        mt_model = build_multitask_efficientnet(pretrained=False)
-        mt_model = load_checkpoint(mt_model, mt_path)
-        # Recreate test split (same seed = same split)
-        df_all = pd.read_csv(MULTITASK_LABELS_CSV)
-        df_all = df_all[df_all['spec_path'].apply(os.path.exists)].reset_index(drop=True)
-        y_all  = df_all['sound_label'].values
-        idx    = np.arange(len(df_all))
-        _, idx_test = train_test_split(idx, test_size=0.15, stratify=y_all, random_state=42)
-        df_test = df_all.iloc[idx_test].reset_index(drop=True)
-    else:
-        print("\n[evaluation] MultiTask model not found — training …")
-        mt_model, df_test = train_multitask_efficientnet()
-
-    metrics_dis, metrics_snd = evaluate_multitask(mt_model, df_test)
-    metrics_all.append(metrics_dis)
-    metrics_all.append(metrics_snd)
+    if mode in ("all", "multitask"):
+        mt_path = os.path.join(SAVED_MODELS_DIR, "multitask_efficientnet.pt")
+        if os.path.exists(mt_path):
+            print("\n[evaluation] Loading saved MultiTask EfficientNet ...")
+            mt_model = build_multitask_efficientnet(pretrained=False)
+            mt_model = load_checkpoint(mt_model, mt_path)
+            df_all = pd.read_csv(MULTITASK_LABELS_CSV)
+            df_all = df_all[df_all['spec_path'].apply(os.path.exists)].reset_index(drop=True)
+            y_all  = df_all['sound_label'].values
+            idx    = np.arange(len(df_all))
+            _, idx_test = train_test_split(idx, test_size=0.15, stratify=y_all, random_state=42)
+            df_test = df_all.iloc[idx_test].reset_index(drop=True)
+        else:
+            print("\n[evaluation] MultiTask model not found -- training ...")
+            mt_model, df_test = train_multitask_efficientnet()
+        metrics_dis, metrics_snd = evaluate_multitask(mt_model, df_test)
+        metrics_all.append(metrics_dis)
+        metrics_all.append(metrics_snd)
 
     # ── Summary table ─────────────────────────────────────────────
-    save_comparison_table(metrics_all)
+    if metrics_all:
+        save_comparison_table(metrics_all)

@@ -98,9 +98,12 @@ EPOCHS_MULTITASK = 40       # total epochs; first half: frozen backbone
 PATIENCE        = 8         # early stopping patience
 
 # ── XGBoost settings ──────────────────────────────────────────────────────────
-XGB_N_ESTIMATORS  = 300
-XGB_MAX_DEPTH     = 6
-XGB_LEARNING_RATE = 0.1
+XGB_N_ESTIMATORS  = 500
+XGB_MAX_DEPTH     = 8
+XGB_LEARNING_RATE = 0.05
+XGB_N_AUDIO_FEATURES = 256   # 64 feature rows x 4 stats (mean/std/max/min)
+XGB_N_META_FEATURES  = 8     # age, gender, fever, resp_cond, cough, dyspnea, wheezing, congestion
+XGB_N_TOTAL_FEATURES = XGB_N_META_FEATURES + XGB_N_AUDIO_FEATURES  # 264
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SAVED_MODELS_DIR = "./saved_models"

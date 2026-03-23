@@ -1,5 +1,2 @@
 Model,Accuracy,F1,Recall,Precision,AUROC
-xgboost,0.5467,0.5454,0.5467,0.5472,0.5883
-coughvid_efficientnet,0.7895,0.7403,0.726,0.8432,0.7602
-multitask_disease,0.9367,0.7859,0.863,0.7369,0.9667
-multitask_sound,0.6334,0.5636,0.5474,0.5899,0.7938
+xgboost,0.7283,0.7215,0.728,0.7525,0.7494

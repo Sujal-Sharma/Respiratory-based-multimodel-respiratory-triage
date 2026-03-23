@@ -182,22 +182,35 @@ def _find_coughvid_audio(uuid: str) -> str:
     return None
 
 
-def _extract_mfcc_features(audio_path: str, n_mfcc: int = N_MFCC,
-                            sr: int = 16000, duration: float = 3.0) -> np.ndarray:
-    """
-    Extract MFCC statistical features from a cough audio file.
+# Audio feature dimensions (Pahar 2022 / Mohammed 2023 consensus):
+# MFCCs(13)+delta(13)+delta2(13) + spectral(11) + temporal(2) + chroma(12) = 64 rows
+# Each row: mean, std, max, min = 4 stats => 64 * 4 = 256 features
+N_AUDIO_FEATURES = 256
 
-    Pipeline (matches Orlandic/Chaudhari COUGHVID papers):
+
+def _extract_audio_features(audio_path: str, n_mfcc: int = 13,
+                             sr: int = 16000, duration: float = 3.0) -> np.ndarray:
+    """
+    Extract comprehensive audio features from a cough recording.
+
+    Based on consensus from Pahar (2022), Mohammed (2023), Chaudhari (2022):
+      - MFCCs (13) + delta + delta-delta  — top discriminative features
+      - Spectral: centroid, bandwidth, contrast (7 bands), rolloff, flatness
+      - Zero-crossing rate, RMS energy
+      - Chroma (12 pitch classes)
+
+    Statistics per feature: mean, std, max, min  (4 stats each)
+
+    Pipeline:
       1. Load & resample to 16 kHz
-      2. Trim leading/trailing silence (top_db=20) — important for crowd-sourced audio
-      3. Peak-normalize (handles variable mic levels across devices)
-      4. Pad/truncate to 3 seconds (covers ~95% of valid coughs)
-      5. Compute MFCCs + delta coefficients
-      6. Aggregate: mean + std per coefficient
+      2. Trim silence (top_db=20)
+      3. Peak-normalize
+      4. Pad/truncate to 3 seconds
+      5. Extract all features + summary statistics
 
     Returns
     -------
-    features : np.ndarray shape (4 * n_mfcc,)  — 160 features if n_mfcc=40
+    features : np.ndarray shape (N_AUDIO_FEATURES,) — 296 features
     All-zeros on load failure.
     """
     try:
@@ -211,52 +224,124 @@ def _extract_mfcc_features(audio_path: str, n_mfcc: int = N_MFCC,
         if peak > 1e-9:
             y = y / peak
 
-        # Pad / truncate to fixed duration (3s covers ~95% of coughs)
+        # Pad / truncate to fixed duration
         target = int(sr * duration)
         if len(y) < target:
             y = np.pad(y, (0, target - len(y)), mode='constant')
         else:
             y = y[:target]
 
-        mfcc  = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc,
-                                      n_fft=2048, hop_length=512)
-        delta = librosa.feature.delta(mfcc)
+        # ── MFCCs (13) + delta + delta-delta ─────────────────────────
+        mfcc   = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc,
+                                       n_fft=2048, hop_length=512)
+        delta  = librosa.feature.delta(mfcc)
+        delta2 = librosa.feature.delta(mfcc, order=2)
+
+        # ── Spectral features ────────────────────────────────────────
+        spec_centroid  = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=512)
+        spec_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr, hop_length=512)
+        spec_contrast  = librosa.feature.spectral_contrast(y=y, sr=sr, hop_length=512,
+                                                            n_bands=6)  # 7 rows
+        spec_rolloff   = librosa.feature.spectral_rolloff(y=y, sr=sr, hop_length=512)
+        spec_flatness  = librosa.feature.spectral_flatness(y=y, hop_length=512)
+
+        # ── Temporal features ────────────────────────────────────────
+        zcr = librosa.feature.zero_crossing_rate(y, hop_length=512)
+        rms = librosa.feature.rms(y=y, hop_length=512)
+
+        # ── Chroma (12 pitch classes) ────────────────────────────────
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=512)
+
+        # ── Aggregate: mean, std, max, min per feature row ───────────
+        def _stats(feat_2d):
+            """Compute 4 summary stats per row of a 2D feature matrix."""
+            return np.concatenate([
+                feat_2d.mean(axis=1),
+                feat_2d.std(axis=1),
+                feat_2d.max(axis=1),
+                feat_2d.min(axis=1),
+            ])
 
         features = np.concatenate([
-            mfcc.mean(axis=1),  mfcc.std(axis=1),
-            delta.mean(axis=1), delta.std(axis=1),
+            _stats(mfcc),            # 13 * 4 = 52
+            _stats(delta),           # 13 * 4 = 52
+            _stats(delta2),          # 13 * 4 = 52
+            _stats(spec_centroid),   # 1 * 4  = 4
+            _stats(spec_bandwidth),  # 1 * 4  = 4
+            _stats(spec_contrast),   # 7 * 4  = 28
+            _stats(spec_rolloff),    # 1 * 4  = 4
+            _stats(spec_flatness),   # 1 * 4  = 4
+            _stats(zcr),             # 1 * 4  = 4
+            _stats(rms),             # 1 * 4  = 4
+            _stats(chroma),          # 12 * 4 = 48
         ])
         return features.astype(np.float32)
     except Exception:
-        return np.zeros(4 * n_mfcc, dtype=np.float32)
+        return np.zeros(N_AUDIO_FEATURES, dtype=np.float32)
+
+
+def _parse_expert_diagnosis(val) -> str:
+    """Extract diagnosis string from expert label JSON."""
+    import ast
+    if pd.isna(val):
+        return None
+    try:
+        d = ast.literal_eval(val)
+        return d.get('diagnosis', None)
+    except Exception:
+        return None
+
+
+def _parse_expert_quality(val) -> str:
+    """Extract quality string from expert label JSON."""
+    import ast
+    if pd.isna(val):
+        return None
+    try:
+        d = ast.literal_eval(val)
+        return d.get('quality', None)
+    except Exception:
+        return None
+
+
+def _is_false(val) -> bool:
+    """Check if a metadata boolean field is False/missing."""
+    if pd.isna(val):
+        return True
+    if isinstance(val, bool):
+        return not val
+    return str(val).strip().lower() in ('false', '0', 'no', '')
 
 
 def preprocess_coughvid():
     """
-    Load COUGHVID, extract metadata + MFCC audio features, balance to 2 classes.
+    Load COUGHVID, extract metadata + audio features, balance to 2 classes.
 
-    Label remapping:
-      healthy     → Healthy
-      symptomatic → Symptomatic
-      COVID-19    → Symptomatic  (symptoms overlap; binary is more robust)
+    Hybrid labeling strategy (Pahar 2022 / Orlandic 2021):
+      Symptomatic: ONLY expert-labeled (doctor-verified diagnosis)
+        - COVID-19, lower_infection, upper_infection, obstructive_disease
+      Healthy: Expert-labeled healthy_cough + high-confidence self-reported
+        - Self-reported: status='healthy', no symptoms, cough_detected >= 0.9
 
-    Features per sample (total 168):
+    This gives ~1,690 Symptomatic + ~1,690 Healthy = ~3,380 balanced samples
+    with dramatically cleaner labels than self-reported alone.
+
+    Features per sample (264 total):
       Metadata (8):  age_norm, gender_enc, fever_muscle_pain_enc,
                      resp_cond_enc, cough_score, dyspnea_enc,
                      wheezing_enc, congestion_enc
-      MFCC (160):    40 MFCC mean + 40 MFCC std + 40 delta mean + 40 delta std
-
-    Samples: 1000 per class × 2 classes = 2000 total (fast to process).
+      Audio (256):   13 MFCCs + deltas + delta2, spectral features,
+                     ZCR, RMS, chroma  x  4 stats (mean/std/max/min)
 
     Returns
     -------
-    X : np.ndarray  shape (N, 168)
+    X : np.ndarray  shape (N, 264)
     y : np.ndarray  shape (N,)
     label_map : dict {class_name: int}
     """
-    print("\n" + "═" * 60)
-    print("COUGHVID PREPROCESSING  (metadata + MFCC audio features)")
-    print("═" * 60)
+    print("\n" + "=" * 60)
+    print("COUGHVID PREPROCESSING  (expert-label hybrid)")
+    print("=" * 60)
 
     # Build metadata CSV from JSONs if it doesn't exist yet
     if not os.path.exists(COUGHVID_METADATA):
@@ -265,62 +350,139 @@ def preprocess_coughvid():
     df = pd.read_csv(COUGHVID_METADATA, low_memory=False)
     print(f"  Raw rows: {len(df):,}")
 
-    # Remap labels: COVID-19 → Symptomatic, healthy → Healthy
-    df['status_orig'] = df['status']
-    df['status']      = df['status'].map(COUGHVID_LABEL_REMAP)
-    df = df[df['status'].isin(COUGHVID_CLASSES)].copy()
-
-    # Keep only high-confidence cough recordings
+    # Keep only recordings with cough detected
     df = df[df['cough_detected'] >= 0.8].copy()
-    print(f"  After filters: {len(df):,}")
-    print(f"  Distribution:\n{df['status'].value_counts()}")
+    print(f"  After cough filter (>=0.8): {len(df):,}")
+
+    # ── Parse expert labels ──────────────────────────────────────
+    EXPERT_DISEASE_MAP = {
+        'COVID-19':            'Symptomatic',
+        'lower_infection':     'Symptomatic',
+        'upper_infection':     'Symptomatic',
+        'obstructive_disease': 'Symptomatic',
+        'healthy_cough':       'Healthy',
+    }
+
+    for i in [1, 2, 3]:
+        df[f'expert_diag_{i}'] = df[f'expert_labels_{i}'].apply(_parse_expert_diagnosis)
+        df[f'expert_qual_{i}'] = df[f'expert_labels_{i}'].apply(_parse_expert_quality)
+
+    # Best expert label = most common diagnosis across available experts
+    def _best_expert(row):
+        diags = [row[f'expert_diag_{i}'] for i in [1, 2, 3]
+                 if row[f'expert_diag_{i}'] is not None]
+        if not diags:
+            return None
+        from collections import Counter
+        return Counter(diags).most_common(1)[0][0]
+
+    df['expert_best'] = df.apply(_best_expert, axis=1)
+    df['expert_binary'] = df['expert_best'].map(EXPERT_DISEASE_MAP)
+
+    # Remove expert samples with no_cough quality
+    bad_qual = False
+    for i in [1, 2, 3]:
+        bad_qual = bad_qual | (df[f'expert_qual_{i}'] == 'no_cough')
+    df.loc[bad_qual, 'expert_binary'] = None
+
+    expert_symp = df[df['expert_binary'] == 'Symptomatic'].copy()
+    expert_heal = df[df['expert_binary'] == 'Healthy'].copy()
+    print(f"\n  Expert-labeled Symptomatic: {len(expert_symp):,}")
+    print(f"  Expert-labeled Healthy:     {len(expert_heal):,}")
+
+    # ── High-confidence self-reported Healthy ────────────────────
+    # Criteria: no expert label, status='healthy', no symptoms, cough >= 0.9
+    expert_uuids = set(df[df['expert_binary'].notna()]['uuid'])
+    sr = df[~df['uuid'].isin(expert_uuids)].copy()
+    sr = sr[sr['status'] == 'healthy']
+    sr = sr[sr['cough_detected'] >= 0.9]
+
+    no_symptoms = sr['fever_muscle_pain'].apply(_is_false) & sr['respiratory_condition'].apply(_is_false)
+    for col in ['dyspnea_1', 'wheezing_1', 'congestion_1']:
+        if col in sr.columns:
+            no_symptoms = no_symptoms & sr[col].apply(_is_false)
+    sr_healthy = sr[no_symptoms].copy()
+    print(f"  Self-reported Healthy (high-confidence): {len(sr_healthy):,}")
+
+    # ── Combine and balance ──────────────────────────────────────
+    all_healthy = pd.concat([expert_heal, sr_healthy]).reset_index(drop=True)
+    all_healthy['status'] = 'Healthy'
+
+    all_symptomatic = expert_symp.copy()
+    all_symptomatic['status'] = 'Symptomatic'
+
+    # Balance: undersample larger class to match smaller
+    n_target = min(len(all_healthy), len(all_symptomatic))
+    print(f"\n  Balancing to {n_target:,} per class...")
+
+    if len(all_healthy) > n_target:
+        all_healthy = all_healthy.sample(n=n_target, random_state=42)
+    if len(all_symptomatic) > n_target:
+        all_symptomatic = all_symptomatic.sample(n=n_target, random_state=42)
+
+    df_bal = pd.concat([all_healthy, all_symptomatic]).reset_index(drop=True)
+    print(f"  Healthy:     {len(all_healthy):,}")
+    print(f"  Symptomatic: {len(all_symptomatic):,}")
+    print(f"  Total:       {len(df_bal):,} (1:1 balanced)")
 
     # ── Metadata features ──────────────────────────────────────────
-    df['age_norm']              = (df['age'].clip(0, 100).fillna(50)) / 100.0
-    df['gender_enc']            = df['gender'].apply(_encode_gender)
-    df['fever_muscle_pain_enc'] = df['fever_muscle_pain'].apply(_encode_bool)
-    df['resp_cond_enc']         = df['respiratory_condition'].apply(_encode_bool)
-    df['cough_score']           = df['cough_detected'].astype(float)
-    df['dyspnea_enc']           = df['dyspnea_1'].apply(_encode_bool) if 'dyspnea_1' in df.columns else 0.0
-    df['wheezing_enc']          = df['wheezing_1'].apply(_encode_bool) if 'wheezing_1' in df.columns else 0.0
-    df['congestion_enc']        = df['congestion_1'].apply(_encode_bool) if 'congestion_1' in df.columns else 0.0
+    df_bal['age_norm']              = (df_bal['age'].clip(0, 100).fillna(50)) / 100.0
+    df_bal['gender_enc']            = df_bal['gender'].apply(_encode_gender)
+    df_bal['fever_muscle_pain_enc'] = df_bal['fever_muscle_pain'].apply(_encode_bool)
+    df_bal['resp_cond_enc']         = df_bal['respiratory_condition'].apply(_encode_bool)
+    df_bal['cough_score']           = df_bal['cough_detected'].astype(float)
+    df_bal['dyspnea_enc']           = df_bal['dyspnea_1'].apply(_encode_bool) if 'dyspnea_1' in df_bal.columns else 0.0
+    df_bal['wheezing_enc']          = df_bal['wheezing_1'].apply(_encode_bool) if 'wheezing_1' in df_bal.columns else 0.0
+    df_bal['congestion_enc']        = df_bal['congestion_1'].apply(_encode_bool) if 'congestion_1' in df_bal.columns else 0.0
 
     META_COLS = [
         'age_norm', 'gender_enc', 'fever_muscle_pain_enc',
         'resp_cond_enc', 'cough_score',
         'dyspnea_enc', 'wheezing_enc', 'congestion_enc'
     ]
-    df = df.dropna(subset=['age_norm']).reset_index(drop=True)
+    df_bal = df_bal.dropna(subset=['age_norm']).reset_index(drop=True)
 
-    # ── Balance: 1000 per class ────────────────────────────────────
-    balanced_dfs = []
-    for cls in COUGHVID_CLASSES:
-        cls_df = df[df['status'] == cls]
-        n      = min(len(cls_df), COUGHVID_SAMPLES_PER_CLASS)
-        balanced_dfs.append(cls_df.sample(n=n, random_state=42))
-        print(f"  '{cls}': {n:,} samples selected")
-    df_bal = pd.concat(balanced_dfs).reset_index(drop=True)
-
-    # ── Extract MFCC features from audio ──────────────────────────
-    n_mfcc     = N_MFCC
-    mfcc_dim   = 4 * n_mfcc  # mean+std for mfcc and delta = 4 × 40 = 160
-    mfcc_names = (
-        [f'mfcc_mean_{i}' for i in range(n_mfcc)] +
-        [f'mfcc_std_{i}'  for i in range(n_mfcc)] +
-        [f'delta_mean_{i}' for i in range(n_mfcc)] +
-        [f'delta_std_{i}'  for i in range(n_mfcc)]
+    # ── Extract audio features (MFCCs + spectral + chroma) ────────
+    audio_dim  = N_AUDIO_FEATURES   # 256 features
+    n_mfcc_used = 13
+    audio_names = (
+        # MFCCs (13) x 4 stats = 52
+        [f'mfcc_{s}_{i}' for s in ['mean','std','max','min'] for i in range(n_mfcc_used)] +
+        # Delta MFCCs (13) x 4 = 52
+        [f'delta_{s}_{i}' for s in ['mean','std','max','min'] for i in range(n_mfcc_used)] +
+        # Delta-delta MFCCs (13) x 4 = 52
+        [f'delta2_{s}_{i}' for s in ['mean','std','max','min'] for i in range(n_mfcc_used)] +
+        # Spectral centroid (1) x 4 = 4
+        [f'spec_centroid_{s}' for s in ['mean','std','max','min']] +
+        # Spectral bandwidth (1) x 4 = 4
+        [f'spec_bandwidth_{s}' for s in ['mean','std','max','min']] +
+        # Spectral contrast (7) x 4 = 28
+        [f'spec_contrast_{s}_{i}' for s in ['mean','std','max','min'] for i in range(7)] +
+        # Spectral rolloff (1) x 4 = 4
+        [f'spec_rolloff_{s}' for s in ['mean','std','max','min']] +
+        # Spectral flatness (1) x 4 = 4
+        [f'spec_flatness_{s}' for s in ['mean','std','max','min']] +
+        # ZCR (1) x 4 = 4
+        [f'zcr_{s}' for s in ['mean','std','max','min']] +
+        # RMS (1) x 4 = 4
+        [f'rms_{s}' for s in ['mean','std','max','min']] +
+        # Chroma (12) x 4 = 48
+        [f'chroma_{s}_{i}' for s in ['mean','std','max','min'] for i in range(12)]
     )
+    assert len(audio_names) == audio_dim, f"Name count {len(audio_names)} != {audio_dim}"
 
-    print(f"\n  Extracting MFCC features from {len(df_bal):,} audio files …")
-    mfcc_matrix  = np.zeros((len(df_bal), mfcc_dim), dtype=np.float32)
+    print(f"\n  Extracting {audio_dim} audio features from {len(df_bal):,} files …")
+    print("  Features: 13 MFCCs+delta+delta2, spectral (centroid/bandwidth/contrast/")
+    print("            rolloff/flatness), ZCR, RMS, 12 chroma  x  4 stats each")
+    audio_matrix = np.zeros((len(df_bal), audio_dim), dtype=np.float32)
     audio_found  = 0
 
     for i, row in tqdm(df_bal.iterrows(), total=len(df_bal),
-                        desc="COUGHVID MFCC"):
+                        desc="COUGHVID audio features"):
         uuid       = str(row.get('uuid', ''))
         audio_path = _find_coughvid_audio(uuid)
         if audio_path:
-            mfcc_matrix[i] = _extract_mfcc_features(audio_path)
+            audio_matrix[i] = _extract_audio_features(audio_path)
             audio_found    += 1
 
     print(f"  Audio files found: {audio_found:,} / {len(df_bal):,} "
@@ -328,20 +490,21 @@ def preprocess_coughvid():
     if audio_found < len(df_bal) * 0.5:
         print("  WARNING: < 50% audio found — XGBoost will rely mostly on metadata")
 
-    # ── Combine metadata + MFCC into one DataFrame ────────────────
+    # ── Combine metadata + audio features into one DataFrame ─────
     label_map      = {cls: i for i, cls in enumerate(COUGHVID_CLASSES)}
     df_bal['label'] = df_bal['status'].map(label_map)
 
-    mfcc_df = pd.DataFrame(mfcc_matrix, columns=mfcc_names)
-    df_out  = pd.concat([df_bal[META_COLS + ['status', 'label', 'uuid']].reset_index(drop=True),
-                         mfcc_df], axis=1)
+    audio_df = pd.DataFrame(audio_matrix, columns=audio_names)
+    df_out   = pd.concat([df_bal[META_COLS + ['status', 'label', 'uuid']].reset_index(drop=True),
+                          audio_df], axis=1)
     df_out.to_csv(COUGHVID_LABELS_CSV, index=False)
-    print(f"  Saved → {COUGHVID_LABELS_CSV}")
+    print(f"  Saved -> {COUGHVID_LABELS_CSV}")
 
-    X = df_out[META_COLS + mfcc_names].values.astype(np.float32)
+    FEATURE_COLS = META_COLS + audio_names
+    X = df_out[FEATURE_COLS].values.astype(np.float32)
     y = df_out['label'].values.astype(np.int32)
-    print(f"  Feature shape: {X.shape}  (8 metadata + {mfcc_dim} MFCC)")
-    print("═" * 60)
+    print(f"  Feature shape: {X.shape}  (8 metadata + {audio_dim} audio)")
+    print("=" * 60)
     return X, y, label_map
 
 
