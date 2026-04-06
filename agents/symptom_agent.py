@@ -1,164 +1,192 @@
 """
-agents/symptom_agent.py — XGBoost inference wrapper for COUGHVID.
+agents/symptom_agent.py — XGBoost symptom + metadata agent.
 
-This agent receives patient metadata and returns:
-  - predicted class label
-  - confidence probabilities
-  - structured result dict for the LangGraph pipeline
+Updated from original: now outputs disease-specific probability hints
+(copd_probability_hint, pneumonia_probability_hint) in addition to
+the binary healthy/symptomatic prediction.
 
-Model format: dict with model + feature selection indices + threshold.
+Keeps the same XGBoost model format (loaded from xgboost_coughvid.pkl)
+and the same 8-feature metadata vector. The disease hints are derived
+from clinical heuristics applied to the symptom pattern.
 """
 
 import os
+import sys
 import pickle
 import numpy as np
-from config import SAVED_MODELS_DIR, COUGHVID_CLASSES, XGB_N_AUDIO_FEATURES
 
-_MODEL_PATH   = os.path.join(SAVED_MODELS_DIR, "xgboost_coughvid.pkl")
-_model        = None   # lazy-loaded singleton
-_selected_idx = None   # feature selection indices
-_threshold    = 0.5    # classification threshold (tuned during training)
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+_DEFAULT_MODEL_PATH = './saved_models/xgboost_coughvid.pkl'
+
+_model        = None
+_selected_idx = None
+_threshold    = 0.5
 
 
-def _load_model():
-    """Load XGBoost model from disk (once)."""
+def _load_model(model_path: str = _DEFAULT_MODEL_PATH):
     global _model, _selected_idx, _threshold
     if _model is None:
-        if not os.path.exists(_MODEL_PATH):
+        if not os.path.exists(model_path):
             raise FileNotFoundError(
-                f"XGBoost model not found at {_MODEL_PATH}. "
-                "Run training.train_xgboost() first."
+                f"XGBoost model not found at {model_path}. "
+                "Run XGBoost training first."
             )
-        with open(_MODEL_PATH, 'rb') as f:
+        with open(model_path, 'rb') as f:
             data = pickle.load(f)
-
         _model        = data['model']
         _selected_idx = data.get('selected_idx', None)
         _threshold    = data.get('threshold', 0.5)
         n_sel = len(_selected_idx) if _selected_idx is not None else '?'
-        print(f"[symptom_agent] model loaded <- {_MODEL_PATH}")
-        print(f"  {n_sel} selected features, threshold={_threshold:.3f}")
+        print(f"[SymptomAgent] Loaded {model_path} | "
+              f"{n_sel} selected features | threshold={_threshold:.3f}")
     return _model
 
 
-def predict_symptom(
-    age: float,
-    gender: str,
-    fever_muscle_pain: bool,
-    respiratory_condition: bool,
-    cough_detected: float,
-    dyspnea: bool = False,
-    wheezing: bool = False,
-    congestion: bool = False
-) -> dict:
+class SymptomAgent:
     """
-    Predict Healthy / Symptomatic from patient metadata.
+    Symptom-based risk agent using XGBoost on 8 metadata features.
 
-    When called from the pipeline (without audio), audio features are
-    zero-padded. Metadata alone gives ~51% confidence -- acts as
-    supplementary signal, not primary classifier.
-
-    Returns
-    -------
-    dict with label, label_int, confidence, probabilities, agent
+    Outputs binary healthy/symptomatic prediction plus disease-specific
+    probability hints based on clinical feature patterns.
     """
-    model = _load_model()
 
-    # Encode metadata (same order as preprocessing.py)
-    age_norm   = min(float(age), 100.0) / 100.0
-    gender_map = {'male': 0.0, 'female': 1.0}
-    gender_enc = gender_map.get(str(gender).strip().lower(), 0.5)
+    AGENT_NAME = 'Symptom Agent'
 
-    def _bool(v):
-        return 1.0 if v else 0.0
+    def __init__(self, model_path: str = _DEFAULT_MODEL_PATH):
+        self.model_path = model_path
+        self._model        = None
+        self._selected_idx = None
+        self._threshold    = 0.5
+        self._load()
 
-    meta = [
-        age_norm,
-        gender_enc,
-        _bool(fever_muscle_pain),
-        _bool(respiratory_condition),
-        float(cough_detected),
-        _bool(dyspnea),
-        _bool(wheezing),
-        _bool(congestion),
-    ]
+    def _load(self):
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(
+                f"XGBoost model not found at {self.model_path}."
+            )
+        with open(self.model_path, 'rb') as f:
+            data = pickle.load(f)
+        self._model        = data['model']
+        self._selected_idx = data.get('selected_idx', None)
+        self._threshold    = data.get('threshold', 0.5)
+        print(f"[SymptomAgent] Loaded | threshold={self._threshold:.3f}")
 
-    # Zero-pad audio features (no audio available in pipeline mode)
-    audio_pad = [0.0] * XGB_N_AUDIO_FEATURES  # 256
+    def build_features(self,
+                       age: float,
+                       gender: str,
+                       fever_muscle_pain: bool,
+                       dyspnea: bool,
+                       wheezing: bool,
+                       congestion: bool,
+                       resp_condition: bool,
+                       cough_severity: float) -> np.ndarray:
+        """Build 8-feature metadata vector (same order as training)."""
+        gender_enc = {'male': 0.0, 'female': 1.0}.get(
+            str(gender).strip().lower(), 0.5
+        )
+        return np.array([
+            float(age) / 100.0,
+            gender_enc,
+            1.0 if fever_muscle_pain else 0.0,
+            1.0 if dyspnea           else 0.0,
+            1.0 if wheezing          else 0.0,
+            1.0 if congestion        else 0.0,
+            1.0 if resp_condition    else 0.0,
+            float(cough_severity) / 10.0,
+        ], dtype=np.float32)
 
-    full_features = np.array([meta + audio_pad], dtype=np.float32)
+    def predict(self,
+                age: float,
+                gender: str,
+                fever_muscle_pain: bool,
+                dyspnea: bool,
+                wheezing: bool,
+                congestion: bool,
+                resp_condition: bool,
+                cough_severity: float) -> dict:
+        """
+        Predict symptomatic risk from patient metadata.
 
-    # Apply feature selection
-    if _selected_idx is not None:
-        full_features = full_features[:, _selected_idx]
+        Returns
+        -------
+        dict with keys:
+            agent, symptomatic_probability, copd_probability_hint,
+            pneumonia_probability_hint, detected, confidence, error
+        """
+        try:
+            features = self.build_features(
+                age, gender, fever_muscle_pain, dyspnea,
+                wheezing, congestion, resp_condition, cough_severity
+            )
 
-    proba = model.predict_proba(full_features)[0]
+            if self._selected_idx is not None:
+                features = features[self._selected_idx]
 
-    # Apply optimised threshold (tuned to maximise Macro F1)
-    # proba[1] = P(Symptomatic)
-    if proba[1] >= _threshold:
-        label_int = 1
-    else:
-        label_int = 0
+            proba            = self._model.predict_proba(features.reshape(1, -1))[0]
+            symptomatic_prob = float(proba[1])
 
-    label      = COUGHVID_CLASSES[label_int]
-    confidence = float(proba[label_int])
+            # Clinical heuristics: derive disease-specific hints from symptom pattern
+            # COPD indicators: prior respiratory condition + dyspnea (chronic obstruction)
+            copd_factor = 0.7 if (resp_condition and dyspnea) else 0.3
+            # Pneumonia indicators: fever + dyspnea (acute infection pattern)
+            pneu_factor = 0.6 if (fever_muscle_pain and dyspnea) else 0.2
 
-    return {
-        'label':         label,
-        'label_int':     label_int,
-        'confidence':    round(confidence, 4),
-        'probabilities': {cls: round(float(p), 4)
-                          for cls, p in zip(COUGHVID_CLASSES, proba)},
-        'agent':         'symptom_agent',
-    }
+            copd_hint = min(symptomatic_prob * copd_factor, 1.0)
+            pneu_hint = min(symptomatic_prob * pneu_factor, 1.0)
+
+            return {
+                'agent':                    self.AGENT_NAME,
+                'symptomatic_probability':  round(symptomatic_prob, 4),
+                'copd_probability_hint':    round(copd_hint, 4),
+                'pneumonia_probability_hint': round(pneu_hint, 4),
+                'detected':                 symptomatic_prob >= self._threshold,
+                'confidence':               round(symptomatic_prob, 4),
+                'error':                    None,
+            }
+
+        except Exception as e:
+            return {
+                'agent':                    self.AGENT_NAME,
+                'symptomatic_probability':  0.0,
+                'copd_probability_hint':    0.0,
+                'pneumonia_probability_hint': 0.0,
+                'detected':                 False,
+                'confidence':               0.0,
+                'error':                    str(e),
+            }
 
 
-def predict_from_array(features: np.ndarray) -> dict:
+# ── Module-level convenience function (preserves backward compatibility) ─────
+
+def predict_symptom(age, gender, fever_muscle_pain, respiratory_condition,
+                    cough_detected=0.5, dyspnea=False, wheezing=False,
+                    congestion=False, audio_path=None) -> dict:
     """
-    Predict from a pre-encoded feature array (full 264-feature vector).
-    Feature selection is applied automatically.
+    Backward-compatible function for triage_graph.py and app.py.
+    Delegates to SymptomAgent.predict().
     """
-    model = _load_model()
-
-    if features.ndim == 1:
-        features = features.reshape(1, -1)
-    features = features.astype(np.float32)
-
-    # Apply feature selection
-    if _selected_idx is not None:
-        features = features[:, _selected_idx]
-
-    proba = model.predict_proba(features)[0]
-
-    if proba[1] >= _threshold:
-        label_int = 1
-    else:
-        label_int = 0
-
-    label = COUGHVID_CLASSES[label_int]
-
-    return {
-        'label':         label,
-        'label_int':     label_int,
-        'confidence':    round(float(proba[label_int]), 4),
-        'probabilities': {cls: round(float(p), 4)
-                          for cls, p in zip(COUGHVID_CLASSES, proba)},
-        'agent':         'symptom_agent',
-    }
-
-
-if __name__ == "__main__":
-    result = predict_symptom(
-        age=45,
-        gender='male',
-        fever_muscle_pain=True,
-        respiratory_condition=False,
-        cough_detected=0.95,
-        dyspnea=True,
-        wheezing=False,
-        congestion=False
+    agent = SymptomAgent()
+    return agent.predict(
+        age=age,
+        gender=gender,
+        fever_muscle_pain=fever_muscle_pain,
+        dyspnea=dyspnea,
+        wheezing=wheezing,
+        congestion=congestion,
+        resp_condition=respiratory_condition,
+        cough_severity=float(cough_detected) * 10,
     )
-    print("\n[symptom_agent] Example prediction:")
+
+
+if __name__ == '__main__':
+    agent  = SymptomAgent()
+    result = agent.predict(
+        age=55, gender='male',
+        fever_muscle_pain=False, dyspnea=True,
+        wheezing=True, congestion=False,
+        resp_condition=True, cough_severity=7,
+    )
+    print("[SymptomAgent] Example prediction:")
     for k, v in result.items():
         print(f"  {k}: {v}")
