@@ -39,7 +39,7 @@ class COPDAgent:
         self.encoder = OPERAEncoder(pretrain='operaCT')
 
         # Trained MLP classifier
-        ckpt = torch.load(model_path, map_location=device)
+        ckpt = torch.load(model_path, map_location=device, weights_only=False)
         self.threshold  = ckpt.get('threshold', 0.5)
         hidden_dims     = ckpt.get('hidden_dims', [256, 64])
         input_dim       = ckpt.get('input_dim', 768)

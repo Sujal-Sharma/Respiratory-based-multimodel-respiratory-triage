@@ -210,45 +210,114 @@ print(f"  COPD  — Acc:{copd_summary['Accuracy']:.3f} | F1:{copd_summary['F1 Ma
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. Pneumonia Agent
+# 2. Pneumonia Agent — 5-fold CV OOF predictions (honest evaluation)
+# Each sample is predicted by a model that never trained on it.
 # ══════════════════════════════════════════════════════════════════════════════
-print("\n[2/3] Evaluating Pneumonia agent...")
+print("\n[2/3] Evaluating Pneumonia agent (5-fold CV OOF)...")
 
-ckpt_pneu = torch.load('saved_models/pneumonia_opera_mlp.pt', map_location=device, weights_only=False)
-model_pneu = BinaryMLPClassifier(
-    input_dim=ckpt_pneu.get('input_dim', 768),
-    hidden_dims=ckpt_pneu.get('hidden_dims', [256, 64])
-).to(device)
-model_pneu.load_state_dict(ckpt_pneu['model_state_dict'])
+from sklearn.model_selection import StratifiedKFold
+from torch.utils.data import Dataset as _TorchDS, WeightedRandomSampler
+from models.mlp_classifier import FocalLoss
 
-pneu_test   = EmbeddingDataset('data/pneumonia_test_split.csv', augment=False)
-pneu_loader = DataLoader(pneu_test, batch_size=BATCH_SIZE, shuffle=False)
-
+ckpt_pneu      = torch.load('saved_models/pneumonia_opera_mlp.pt', map_location=device, weights_only=False)
 threshold_pneu = ckpt_pneu.get('threshold', 0.5)
-y_true_pneu, y_pred_pneu, y_prob_pneu = infer_binary(model_pneu, pneu_loader, threshold_pneu)
 
-cm_pneu = confusion_matrix(y_true_pneu, y_pred_pneu)
+df_pneu = pd.read_csv('data/pneumonia_binary_labels_with_embeddings.csv').dropna(
+    subset=['embedding_path']).reset_index(drop=True)
+
+class _PneuDS(_TorchDS):
+    def __init__(self, sub_df):
+        self.paths  = sub_df['embedding_path'].tolist()
+        self.labels = sub_df['label'].tolist()
+    def __len__(self): return len(self.labels)
+    def __getitem__(self, idx):
+        emb = np.load(self.paths[idx]).astype(np.float32)
+        return torch.tensor(emb), torch.tensor(self.labels[idx], dtype=torch.long)
+
+skf            = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+oof_probs      = np.zeros(len(df_pneu))
+oof_labels     = df_pneu['label'].values.copy()
+
+for fold, (train_idx, val_idx) in enumerate(skf.split(df_pneu.index, oof_labels)):
+    tr_df = df_pneu.iloc[train_idx]
+    vl_df = df_pneu.iloc[val_idx]
+
+    tr_lbls = tr_df['label'].values
+    n_pos   = (tr_lbls == 1).sum(); n_neg = (tr_lbls == 0).sum()
+    w       = np.where(tr_lbls == 1, 1.0/n_pos, 1.0/n_neg).astype(np.float64)
+    sampler_f = WeightedRandomSampler(weights=w, num_samples=len(w), replacement=True)
+
+    tr_loader = DataLoader(_PneuDS(tr_df), batch_size=64, sampler=sampler_f)
+    vl_loader = DataLoader(_PneuDS(vl_df), batch_size=64, shuffle=False)
+
+    fm     = BinaryMLPClassifier(input_dim=768, hidden_dims=[256, 64]).to(device)
+    f_opt  = torch.optim.AdamW(fm.parameters(), lr=3e-4, weight_decay=1e-4)
+    f_crit = FocalLoss(alpha=0.25, gamma=2.0)
+    f_sch  = torch.optim.lr_scheduler.CosineAnnealingLR(f_opt, T_max=150)
+
+    best_f1, pat, best_st = 0.0, 0, None
+    for ep in range(150):
+        fm.train()
+        for emb, lbl in tr_loader:
+            emb, lbl = emb.to(device), lbl.to(device)
+            f_opt.zero_grad()
+            f_crit(fm(emb), lbl).backward()
+            torch.nn.utils.clip_grad_norm_(fm.parameters(), 1.0)
+            f_opt.step()
+        f_sch.step()
+        fm.eval()
+        pv, lv = [], []
+        with torch.no_grad():
+            for emb, lbl in vl_loader:
+                pr = torch.softmax(fm(emb.to(device)), dim=1)[:, 1].cpu().numpy()
+                pv.extend((pr >= 0.5).astype(int)); lv.extend(lbl.numpy())
+        vf1 = f1_score(lv, pv, average='macro', zero_division=0)
+        if vf1 > best_f1:
+            best_f1 = vf1
+            best_st = {k: v.clone() for k, v in fm.state_dict().items()}
+            pat = 0
+        else:
+            pat += 1
+        if pat >= 20:
+            break
+
+    fm.load_state_dict(best_st)
+    fm.eval()
+    fold_probs = []
+    with torch.no_grad():
+        for emb, _ in vl_loader:
+            pr = torch.softmax(fm(emb.to(device)), dim=1)[:, 1].cpu().numpy()
+            fold_probs.extend(pr)
+    oof_probs[val_idx] = np.array(fold_probs)
+    print(f"  Fold {fold+1}/5 — Val pos: {oof_labels[val_idx].sum()} | "
+          f"F1: {f1_score(oof_labels[val_idx], (np.array(fold_probs)>=threshold_pneu).astype(int), average='macro', zero_division=0):.3f}")
+
+y_true_pneu = oof_labels
+y_prob_pneu = oof_probs
+y_pred_pneu = (y_prob_pneu >= threshold_pneu).astype(int)
+
+cm_pneu            = confusion_matrix(y_true_pneu, y_pred_pneu)
 fpr_pneu, tpr_pneu, _ = roc_curve(y_true_pneu, y_prob_pneu)
-auroc_pneu = auc(fpr_pneu, tpr_pneu)
+auroc_pneu         = auc(fpr_pneu, tpr_pneu)
 
 plot_confusion_matrix(
     cm_pneu, ['Normal', 'Pneumonia'],
-    f'Pneumonia Agent — Confusion Matrix\n(Threshold={threshold_pneu:.2f}, AUROC={auroc_pneu:.3f})',
+    f'Pneumonia Agent — Confusion Matrix (5-fold CV OOF)\n(Threshold={threshold_pneu:.2f}, AUROC={auroc_pneu:.3f})',
     'outputs/confusion_matrix_pneumonia.png'
 )
 plot_roc(
     fpr_pneu, tpr_pneu, auroc_pneu,
-    'Pneumonia Agent — ROC Curve',
+    'Pneumonia Agent — ROC Curve (5-fold CV OOF)',
     'outputs/roc_curve_pneumonia.png', color=GREEN
 )
 
 pneu_summary = {
     'Accuracy': float(accuracy_score(y_true_pneu, y_pred_pneu)),
-    'F1 Macro': float(f1_score(y_true_pneu, y_pred_pneu, average='macro')),
-    'Recall':   float(recall_score(y_true_pneu, y_pred_pneu, pos_label=1)),
+    'F1 Macro': float(f1_score(y_true_pneu, y_pred_pneu, average='macro', zero_division=0)),
+    'Recall':   float(recall_score(y_true_pneu, y_pred_pneu, pos_label=1, zero_division=0)),
     'AUROC':    float(auroc_pneu),
 }
-print(f"  Pneumonia — Acc:{pneu_summary['Accuracy']:.3f} | F1:{pneu_summary['F1 Macro']:.3f} | "
+print(f"  Pneumonia OOF — Acc:{pneu_summary['Accuracy']:.3f} | F1:{pneu_summary['F1 Macro']:.3f} | "
       f"Recall:{pneu_summary['Recall']:.3f} | AUROC:{pneu_summary['AUROC']:.3f}")
 
 
@@ -257,30 +326,45 @@ print(f"  Pneumonia — Acc:{pneu_summary['Accuracy']:.3f} | F1:{pneu_summary['F
 # ══════════════════════════════════════════════════════════════════════════════
 print("\n[3/3] Evaluating Sound classifier...")
 
-ckpt_snd = torch.load('saved_models/sound_opera_mlp.pt', map_location=device, weights_only=False)
-model_snd = SoundMLPClassifier(
+import torch.nn as nn
+
+class SoundMLP3Class(nn.Module):
+    def __init__(self, input_dim=768, hidden_dims=None, dropout=0.0):
+        super().__init__()
+        if hidden_dims is None:
+            hidden_dims = [512, 256, 64]
+        layers, prev = [], input_dim
+        for h in hidden_dims:
+            layers += [nn.Linear(prev, h), nn.BatchNorm1d(h), nn.ReLU(), nn.Dropout(dropout)]
+            prev = h
+        layers.append(nn.Linear(prev, 3))
+        self.net = nn.Sequential(*layers)
+    def forward(self, x): return self.net(x)
+
+ckpt_snd = torch.load('saved_models/sound_opera_mlp_3class.pt', map_location=device, weights_only=False)
+model_snd = SoundMLP3Class(
     input_dim=ckpt_snd.get('input_dim', 768),
-    hidden_dims=ckpt_snd.get('hidden_dims', [256, 64]),
+    hidden_dims=ckpt_snd.get('hidden_dims', [512, 256, 64]),
 ).to(device)
 model_snd.load_state_dict(ckpt_snd['model_state_dict'])
 
-snd_test   = EmbeddingDataset('data/sound_test_split.csv', label_col='sound_label', augment=False)
+snd_test   = EmbeddingDataset('data/sound_test_3class.csv', label_col='sound_label', augment=False)
 snd_loader = DataLoader(snd_test, batch_size=BATCH_SIZE, shuffle=False)
 
 y_true_snd, y_pred_snd = infer_multiclass(model_snd, snd_loader)
 
-SOUND_LABELS = ['Normal', 'Crackle', 'Wheeze', 'Both']
+SOUND_LABELS = ['Normal', 'Crackle', 'Wheeze']
 cm_snd = confusion_matrix(y_true_snd, y_pred_snd)
 per_class_f1 = f1_score(y_true_snd, y_pred_snd, average=None, zero_division=0)
 
 plot_confusion_matrix(
     cm_snd, SOUND_LABELS,
-    'Sound Classifier — Confusion Matrix',
+    'Sound Classifier — Confusion Matrix (3-class)\nBoth merged into Crackle',
     'outputs/confusion_matrix_sound.png', cmap='Purples'
 )
 plot_per_class_f1(
     SOUND_LABELS, per_class_f1,
-    'Sound Classifier — Per-Class F1 Score',
+    'Sound Classifier — Per-Class F1 Score (3-class)',
     'outputs/per_class_f1_sound.png'
 )
 

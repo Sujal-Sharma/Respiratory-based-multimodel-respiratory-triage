@@ -30,6 +30,9 @@ def _preprocess_one(file_path: str, input_sec: int = 8) -> np.ndarray | None:
     Runs on CPU (called from thread pool).
     Returns np.ndarray (mel_bins, time) or None on failure.
     """
+    # Resolve to absolute path BEFORE chdir — chdir changes relative path resolution
+    file_path = os.path.abspath(file_path)
+
     orig_dir = os.getcwd()
     os.chdir(OPERA_REPO)
     try:
@@ -109,22 +112,24 @@ class OPERAEncoder:
     def _infer_batch(self, specs: list) -> np.ndarray:
         """
         Run GPU forward pass on a list of mel spectrograms.
-        specs: list of np.ndarray, each shape (mel_bins, time)
+        get_entire_signal_librosa returns (time, mel_bins).
+        Model expects (N, 1, mel_bins, time).
         Returns: np.ndarray (N, 768)
         """
-        # Stack into batch tensor: (N, 1, mel_bins, time)
-        # Pad/truncate time dimension to match within batch
-        target_time = max(s.shape[-1] for s in specs)
+        # specs are (time, mel_bins) from get_entire_signal_librosa
+        # model.forward does unsqueeze(1) internally → expects (N, time, mel_bins)
+        # Pad/truncate along time dimension (axis 0) to match within batch
+        target_time = max(s.shape[0] for s in specs)
         padded = []
         for s in specs:
-            if s.shape[-1] < target_time:
-                s = np.pad(s, ((0, 0), (0, target_time - s.shape[-1])))
+            if s.shape[0] < target_time:
+                s = np.pad(s, ((0, target_time - s.shape[0]), (0, 0)))
             else:
-                s = s[:, :target_time]
+                s = s[:target_time, :]
             padded.append(s)
 
         x = torch.tensor(np.stack(padded), dtype=torch.float32)
-        x = x.unsqueeze(1).to(self.device)  # (N, 1, mel, time)
+        x = x.to(self.device)  # (N, time, mel_bins)
 
         with torch.no_grad():
             features = self._model.extract_feature(x, self.dim)  # (N, 768)
