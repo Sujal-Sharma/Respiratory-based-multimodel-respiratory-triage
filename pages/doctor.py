@@ -68,18 +68,20 @@ else:
         alerts = session_store.check_deterioration(pid)
 
         rows.append({
-            "id":           p["id"],
-            "patient_id":   pid,
-            "Name":         p["full_name"] or p["username"],
-            "Username":     p["username"],
-            "Age":          p.get("age") or "—",
-            "Gender":       (p.get("gender") or "—").capitalize(),
-            "Sessions":     total,
+            "id":            p["id"],
+            "patient_id":    pid,
+            "Name":          p["full_name"] or p["username"],
+            "Username":      p["username"],
+            "Age":           p.get("age") or "—",
+            "Gender":        (p.get("gender") or "—").capitalize(),
+            "Sessions":      total,
             "Last Severity": latest["severity"] if latest else "—",
-            "COPD Risk":    f"{latest['copd_confidence']:.0%}" if latest else "—",
-            "Pneu Risk":    f"{latest['pneu_confidence']:.0%}" if latest else "—",
-            "Last Visit":   (latest["timestamp"][:10]) if latest else "Never",
-            "Alert":        "YES" if alerts else "—",
+            "Risk Score":    f"{latest.get('longitudinal_score',0):.0%}" if latest else "—",
+            "COPD Risk":     f"{latest['copd_confidence']:.0%}" if latest else "—",
+            "Pneu Risk":     f"{latest['pneu_confidence']:.0%}" if latest else "—",
+            "Voice Index":   f"{latest.get('voice_index',0):.0%}" if latest else "—",
+            "Last Visit":    (latest["timestamp"][:10]) if latest else "Never",
+            "Alert":         "YES" if alerts else "—",
         })
 
     df = pd.DataFrame(rows)
@@ -91,27 +93,36 @@ else:
                 df["Username"].str.contains(search, case=False))
         df = df[mask]
 
-    # Colour-code severity
-    severity_colors = {"HIGH": "#FFCDD2", "CRITICAL": "#FFCDD2",
-                       "MODERATE": "#FFF9C4", "LOW": "#C8E6C9", "—": "white"}
+    # Colour-code severity — use border accent, keep text always dark
+    severity_border = {"HIGH": "#EF5350", "CRITICAL": "#EF5350",
+                       "MODERATE": "#FFA726", "LOW": "#66BB6A", "—": "#90A4AE"}
 
     st.subheader(f"Registered Patients ({len(df)})")
 
     for _, row in df.iterrows():
-        bg = severity_colors.get(row["Last Severity"], "white")
-        alert_badge = " 🔴 DETERIORATION ALERT" if row["Alert"] == "YES" else ""
+        border = severity_border.get(row["Last Severity"], "#90A4AE")
+        alert_badge = "  🔴 DETERIORATION ALERT" if row["Alert"] == "YES" else ""
 
         with st.container():
             st.markdown(
-                f'<div style="background:{bg};padding:12px;border-radius:8px;'
-                f'margin-bottom:8px;border:1px solid #ddd;">'
-                f'<b>{row["Name"]}</b> (@{row["Username"]}) | '
-                f'Age: {row["Age"]} | {row["Gender"]} | '
-                f'Sessions: {row["Sessions"]} | '
-                f'Last: {row["Last Visit"]} | '
-                f'Severity: <b>{row["Last Severity"]}</b> | '
-                f'COPD: {row["COPD Risk"]} | Pneu: {row["Pneu Risk"]}'
-                f'{alert_badge}</div>',
+                f'<div style="border-left:5px solid {border};padding:12px 16px;'
+                f'border-radius:6px;margin-bottom:8px;border-top:1px solid #eee;'
+                f'border-right:1px solid #eee;border-bottom:1px solid #eee;">'
+                f'<span style="font-size:1.05em;font-weight:600;color:#212121;">'
+                f'{row["Name"]}</span> '
+                f'<span style="color:#555;">(@{row["Username"]})</span>'
+                f'&nbsp;&nbsp;|&nbsp;&nbsp;'
+                f'<span style="color:#333;">Age: {row["Age"]} &nbsp; {row["Gender"]}'
+                f'&nbsp;&nbsp;|&nbsp;&nbsp;Sessions: {row["Sessions"]}'
+                f'&nbsp;&nbsp;|&nbsp;&nbsp;Last visit: {row["Last Visit"]}'
+                f'&nbsp;&nbsp;|&nbsp;&nbsp;Severity: <b style="color:#212121;">{row["Last Severity"]}</b>'
+                f'&nbsp;&nbsp;|&nbsp;&nbsp;Risk: <b>{row["Risk Score"]}</b>'
+                f'&nbsp;&nbsp;|&nbsp;&nbsp;COPD: <b>{row["COPD Risk"]}</b>'
+                f'&nbsp;&nbsp;|&nbsp;&nbsp;Pneu: <b>{row["Pneu Risk"]}</b>'
+                f'&nbsp;&nbsp;|&nbsp;&nbsp;Voice: <b>{row["Voice Index"]}</b>'
+                f'</span>'
+                f'<span style="color:#c62828;font-weight:600;">{alert_badge}</span>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
             if st.button(f"View Patient — {row['Name']}", key=f"btn_{row['id']}"):

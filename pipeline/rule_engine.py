@@ -30,7 +30,8 @@ class RespiratoryRuleEngine:
                  copd_result: dict,
                  pneumonia_result: dict,
                  symptom_result: dict,
-                 sound_result: dict = None) -> dict:
+                 sound_result: dict = None,
+                 longitudinal_score: float = 0.0) -> dict:
         """
         Apply clinical rules to agent outputs.
 
@@ -169,7 +170,7 @@ class RespiratoryRuleEngine:
             return self._make_decision(
                 diagnosis="Possible pneumonia — symptom-based flag",
                 severity="MODERATE",
-                confidence=pneu_hint,
+                confidence=symptom_p,
                 reasoning=(
                     f"Symptom pattern suggests possible pneumonia (hint: {pneu_hint:.0%}). "
                     f"Fever: {fever}. Dyspnoea: {dyspnea}. "
@@ -184,7 +185,7 @@ class RespiratoryRuleEngine:
             return self._make_decision(
                 diagnosis="Possible COPD — symptom-based flag",
                 severity="MODERATE",
-                confidence=copd_hint,
+                confidence=symptom_p,
                 reasoning=(
                     f"Symptom pattern suggests possible COPD (hint: {copd_hint:.0%}). "
                     f"Dyspnoea present. GOLD 2024: dyspnoea + respiratory history = screening warranted."
@@ -193,7 +194,22 @@ class RespiratoryRuleEngine:
                 urgency="routine",
             )
 
-        # ── RULE 7: Generally symptomatic ────────────────────────────────────
+        # ── RULE 7: High longitudinal score (composite Tier 1 signal) ───────
+        if longitudinal_score >= 0.55:
+            return self._make_decision(
+                diagnosis="Elevated respiratory risk — longitudinal monitoring",
+                severity="MODERATE",
+                confidence=longitudinal_score,
+                reasoning=(
+                    f"Combined longitudinal score: {longitudinal_score:.0%}. "
+                    "Symptom severity, voice biomarkers, and/or acoustic drift "
+                    "indicate elevated respiratory risk. Clinical review recommended."
+                ),
+                action="GP appointment this week. Bring symptom history.",
+                urgency="routine",
+            )
+
+        # ── RULE 8: Generally symptomatic ────────────────────────────────────
         if symptom_p >= 0.45:
             return self._make_decision(
                 diagnosis="Symptomatic — respiratory concern",
@@ -208,7 +224,7 @@ class RespiratoryRuleEngine:
                 urgency="routine",
             )
 
-        # ── RULE 9: No significant findings ─────────────────────────────────
+        # ── RULE 9: No significant findings ──────────────────────────────────
         healthy_conf = max(1.0 - copd_conf, 1.0 - pneu_conf, 0.70)
         return self._make_decision(
             diagnosis="No significant respiratory pathology detected",
