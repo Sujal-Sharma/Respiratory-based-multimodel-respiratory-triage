@@ -195,7 +195,7 @@ class RespiratoryRuleEngine:
             )
 
         # ── RULE 7: High longitudinal score (composite Tier 1 signal) ───────
-        if longitudinal_score >= 0.55:
+        if longitudinal_score >= 0.40:
             return self._make_decision(
                 diagnosis="Elevated respiratory risk — longitudinal monitoring",
                 severity="MODERATE",
@@ -210,7 +210,7 @@ class RespiratoryRuleEngine:
             )
 
         # ── RULE 8: Generally symptomatic ────────────────────────────────────
-        if symptom_p >= 0.45:
+        if symptom_p >= 0.40:
             return self._make_decision(
                 diagnosis="Symptomatic — respiratory concern",
                 severity="MODERATE",

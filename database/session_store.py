@@ -95,16 +95,29 @@ class SessionStore:
         emb_blob = cough_embedding.astype(np.float32).tobytes() \
             if cough_embedding is not None else None
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                INSERT INTO patient_baselines
-                    (patient_id, voice_features_json, cough_embedding,
-                     created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(patient_id) DO UPDATE SET
-                    voice_features_json = excluded.voice_features_json,
-                    cough_embedding     = excluded.cough_embedding,
-                    updated_at          = excluded.updated_at
-            """, (patient_id, json.dumps(voice_features), emb_blob, now, now))
+            if emb_blob is not None:
+                # Update both voice and cough
+                conn.execute("""
+                    INSERT INTO patient_baselines
+                        (patient_id, voice_features_json, cough_embedding,
+                         created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(patient_id) DO UPDATE SET
+                        voice_features_json = excluded.voice_features_json,
+                        cough_embedding     = excluded.cough_embedding,
+                        updated_at          = excluded.updated_at
+                """, (patient_id, json.dumps(voice_features), emb_blob, now, now))
+            else:
+                # Only update voice features — preserve existing cough embedding
+                conn.execute("""
+                    INSERT INTO patient_baselines
+                        (patient_id, voice_features_json, cough_embedding,
+                         created_at, updated_at)
+                    VALUES (?, ?, NULL, ?, ?)
+                    ON CONFLICT(patient_id) DO UPDATE SET
+                        voice_features_json = excluded.voice_features_json,
+                        updated_at          = excluded.updated_at
+                """, (patient_id, json.dumps(voice_features), now, now))
             conn.commit()
 
     # ── Session management ────────────────────────────────────────────────────

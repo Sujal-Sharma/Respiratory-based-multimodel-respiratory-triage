@@ -63,6 +63,20 @@ class VoiceAgent:
 
     AGENT_NAME = 'Voice Agent'
 
+    def _to_wav(self, audio_path: str) -> str:
+        """Convert any audio format to wav using librosa+soundfile for parselmouth."""
+        import tempfile, soundfile as sf, librosa
+        ext = os.path.splitext(audio_path)[1].lower()
+        if ext == '.wav':
+            return audio_path
+        try:
+            y, sr = librosa.load(audio_path, sr=16000, mono=True)
+            tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+            sf.write(tmp.name, y, sr)
+            return tmp.name
+        except Exception:
+            return audio_path  # fallback — let parselmouth try directly
+
     def extract_features(self, audio_path: str) -> dict | None:
         """
         Extract voice features from audio file.
@@ -71,7 +85,8 @@ class VoiceAgent:
         if not _PARSELMOUTH_OK:
             return None
         try:
-            sound = parselmouth.Sound(str(audio_path))
+            wav_path = self._to_wav(str(audio_path))
+            sound = parselmouth.Sound(wav_path)
             duration = sound.get_total_duration()
 
             if duration < 1.0:
@@ -88,8 +103,20 @@ class VoiceAgent:
             f0_std  = call(pitch, "Get standard deviation", 0, 0, "Hertz")
 
             if not f0_mean or np.isnan(f0_mean) or f0_mean == 0:
-                # No voiced segments — probably silence or noise
-                return None
+                # No F0 detected — use energy-based features as fallback
+                import librosa
+                y, sr = librosa.load(str(wav_path), sr=16000, mono=True)
+                rms    = float(np.sqrt(np.mean(y**2)))
+                zcr    = float(np.mean(np.abs(np.diff(np.sign(y)))) / 2)
+                if rms < 0.001:
+                    return None  # silence
+                return {
+                    'f0_mean': 0.0, 'f0_std': 0.0,
+                    'jitter': zcr * 0.1,   # proxy
+                    'shimmer': rms,
+                    'hnr': 10.0,            # assume normal HNR as fallback
+                    'phonation_duration': float(sound.get_total_duration()),
+                }
 
             # Jitter
             pp = call(sound, "To PointProcess (periodic, cc)", 75, 600)

@@ -210,13 +210,20 @@ def run_cough_drift(state: TriageState) -> dict:
         enc = OPERAEncoder()
         current_emb = enc.encode(cough_path)
 
-        if baseline and baseline.get('cough_embedding') is not None:
+        # Check if cough baseline exists (may have voice features but no cough yet)
+        has_cough_baseline = (baseline is not None and
+                              baseline.get('cough_embedding') is not None and
+                              len(baseline['cough_embedding']) > 0)
+
+        if has_cough_baseline:
             drift = compute_cough_drift(current_emb, baseline['cough_embedding'])
+            print(f"[triage] Cough drift: {drift:.4f}")
         else:
             drift = 0.0
-            # Save cough baseline
-            vf = baseline.get('voice_features', {}) if baseline else {}
-            store.save_baseline(patient_id, voice_features=vf,
+            # Preserve existing voice features when saving cough baseline
+            existing_vf = (baseline.get('voice_features') or {}) if baseline else {}
+            store.save_baseline(patient_id,
+                                voice_features=existing_vf,
                                 cough_embedding=current_emb)
             print(f"[triage] Cough baseline saved for {patient_id}")
 
