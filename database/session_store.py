@@ -140,3 +140,16 @@ class SessionStore:
                 })
 
         return alerts if alerts else None
+
+    def get_latest_session(self, patient_id: str) -> dict | None:
+        """Get the single most recent session for a patient."""
+        sessions = self.get_sessions(patient_id, n=1)
+        return sessions[0] if sessions else None
+
+    def get_all_patient_ids(self) -> list:
+        """Return all distinct patient_ids that have sessions."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT DISTINCT patient_id FROM sessions ORDER BY patient_id"
+            )
+            return [row[0] for row in cursor.fetchall()]

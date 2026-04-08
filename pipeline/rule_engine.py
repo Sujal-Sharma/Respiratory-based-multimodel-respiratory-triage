@@ -161,22 +161,54 @@ class RespiratoryRuleEngine:
                 urgency="soon",
             )
 
-        # ── RULE 6: Symptomatic but below thresholds ─────────────────────────
-        if symptom_p >= 0.60:
+        # ── RULE 6: High pneumonia hint + key symptoms (Tier 1 no-audio path) ──
+        pneu_hint = symptom_result.get('pneumonia_probability_hint', 0.0)
+        copd_hint = symptom_result.get('copd_probability_hint', 0.0)
+
+        if pneu_hint >= 0.35 and (fever or dyspnea):
+            return self._make_decision(
+                diagnosis="Possible pneumonia — symptom-based flag",
+                severity="MODERATE",
+                confidence=pneu_hint,
+                reasoning=(
+                    f"Symptom pattern suggests possible pneumonia (hint: {pneu_hint:.0%}). "
+                    f"Fever: {fever}. Dyspnoea: {dyspnea}. "
+                    "BTS 2023: fever + dyspnoea = high-risk features. "
+                    "Clinical assessment recommended."
+                ),
+                action="GP appointment within 24–48 hours. Consider CXR.",
+                urgency="soon",
+            )
+
+        if copd_hint >= 0.35 and dyspnea:
+            return self._make_decision(
+                diagnosis="Possible COPD — symptom-based flag",
+                severity="MODERATE",
+                confidence=copd_hint,
+                reasoning=(
+                    f"Symptom pattern suggests possible COPD (hint: {copd_hint:.0%}). "
+                    f"Dyspnoea present. GOLD 2024: dyspnoea + respiratory history = screening warranted."
+                ),
+                action="GP appointment this week. Spirometry advised.",
+                urgency="routine",
+            )
+
+        # ── RULE 7: Generally symptomatic ────────────────────────────────────
+        if symptom_p >= 0.45:
             return self._make_decision(
                 diagnosis="Symptomatic — respiratory concern",
                 severity="MODERATE",
                 confidence=symptom_p,
                 reasoning=(
-                    f"Symptom agent reports {symptom_p:.0%} symptomatic probability, "
-                    "but audio agents show no strong respiratory disease signal. "
-                    "Monitor and re-assess if symptoms worsen."
+                    f"Symptom agent reports {symptom_p:.0%} symptomatic probability. "
+                    "Multiple respiratory symptoms present. "
+                    "Monitor closely and re-assess if symptoms worsen."
                 ),
                 action="GP appointment this week if symptoms persist.",
                 urgency="routine",
             )
 
-        # ── RULE 7: No significant findings ─────────────────────────────────
+        # ── RULE 9: No significant findings ─────────────────────────────────
         healthy_conf = max(1.0 - copd_conf, 1.0 - pneu_conf, 0.70)
         return self._make_decision(
             diagnosis="No significant respiratory pathology detected",

@@ -117,35 +117,44 @@ def analyze_symptoms(state: TriageState) -> dict:
     return {"symptom_result": result}
 
 
+_COPD_SKIP = {
+    'agent': 'COPD Agent', 'disease': 'COPD',
+    'detected': False, 'confidence': 0.0,
+    'probability': 0.0, 'severity_hint': 'LOW',
+    'threshold_used': 0.5, 'error': 'No audio — Tier 1 symptoms-only mode',
+}
+_PNEU_SKIP = {
+    'agent': 'Pneumonia Agent', 'disease': 'Pneumonia',
+    'detected': False, 'confidence': 0.0,
+    'probability': 0.0, 'severity_hint': 'LOW',
+    'threshold_used': 0.64, 'error': 'No audio — Tier 1 symptoms-only mode',
+}
+
 def run_copd_agent(state: TriageState) -> dict:
-    """Run COPDAgent on cough audio."""
+    """Run COPDAgent on lung audio (Tier 2 only). Skip in Tier 1."""
+    lung_path = state.get("lung_audio_path", "")
+    if not lung_path:
+        return {"copd_result": _COPD_SKIP}
     print("[triage] Running COPD agent ...")
     try:
-        result = _get_copd_agent().predict(state["cough_audio_path"])
+        result = _get_copd_agent().predict(lung_path)
     except Exception as e:
         print(f"[triage] COPDAgent error: {e}")
-        result = {
-            'agent': 'COPD Agent', 'disease': 'COPD',
-            'detected': False, 'confidence': 0.0,
-            'probability': 0.0, 'severity_hint': 'LOW',
-            'threshold_used': 0.5, 'error': str(e),
-        }
+        result = {**_COPD_SKIP, 'error': str(e)}
     return {"copd_result": result}
 
 
 def run_pneumonia_agent(state: TriageState) -> dict:
-    """Run PneumoniaAgent on cough audio."""
+    """Run PneumoniaAgent on lung audio (Tier 2 only). Skip in Tier 1."""
+    lung_path = state.get("lung_audio_path", "")
+    if not lung_path:
+        return {"pneumonia_result": _PNEU_SKIP}
     print("[triage] Running Pneumonia agent ...")
     try:
-        result = _get_pneumonia_agent().predict(state["cough_audio_path"])
+        result = _get_pneumonia_agent().predict(lung_path)
     except Exception as e:
         print(f"[triage] PneumoniaAgent error: {e}")
-        result = {
-            'agent': 'Pneumonia Agent', 'disease': 'Pneumonia',
-            'detected': False, 'confidence': 0.0,
-            'probability': 0.0, 'severity_hint': 'LOW',
-            'threshold_used': 0.5, 'error': str(e),
-        }
+        result = {**_PNEU_SKIP, 'error': str(e)}
     return {"pneumonia_result": result}
 
 

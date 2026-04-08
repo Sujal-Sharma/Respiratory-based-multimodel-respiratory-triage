@@ -40,7 +40,7 @@ def _preprocess_one(file_path: str, input_sec: int = 8) -> np.ndarray | None:
 
         # Strip extension — OPERA appends .wav internally
         base = file_path
-        for ext in ('.wav', '.webm', '.mp3', '.flac'):
+        for ext in ('.wav', '.webm', '.mp3', '.flac', '.mp4', '.ogg', '.m4a'):
             if base.endswith(ext):
                 base = base[:-len(ext)]
                 break
