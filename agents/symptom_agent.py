@@ -154,7 +154,7 @@ class SymptomAgent:
                 'error':                      None,
             }
 
-        except Exception as e:
+        except (TypeError, ValueError, RuntimeError, ZeroDivisionError) as e:
             return {
                 'agent':                      self.AGENT_NAME,
                 'symptom_index':              0.0,

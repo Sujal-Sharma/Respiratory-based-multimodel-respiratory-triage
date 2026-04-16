@@ -8,9 +8,12 @@ it triggers alerts without being asked.
 
 import os
 import sys
+import logging
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database.session_store import SessionStore, DB_PATH
+
+logger = logging.getLogger(__name__)
 
 
 class SessionAgent:
@@ -69,7 +72,7 @@ class SessionAgent:
 
         if alerts:
             for alert in alerts:
-                print(f"[SessionAgent] *** {alert['message']}")
+                logger.warning("Deterioration alert", extra={'alert_message': alert.get('message', '')})
 
         return {
             'agent':                self.AGENT_NAME,

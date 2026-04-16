@@ -23,6 +23,7 @@ Citations:
 
 import os
 import sys
+import logging
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -53,6 +54,8 @@ _MCID = {
     'f0_std':            5.0,
     'phonation_duration': 1.0,
 }
+
+logger = logging.getLogger(__name__)
 
 
 class VoiceAgent:
@@ -146,8 +149,8 @@ class VoiceAgent:
             }
             return features
 
-        except Exception as e:
-            print(f"[VoiceAgent] Feature extraction error: {e}")
+        except (FileNotFoundError, OSError, ValueError, RuntimeError) as e:
+            logger.exception("Voice feature extraction error")
             return None
 
     def compute_voice_index(self,

@@ -6,13 +6,21 @@ Run:  python server.py
       OR: flask --app server run --port 5000
 """
 
-import os, sys, json, tempfile, base64
+import os, sys, json, tempfile, base64, logging
 from functools import wraps
 import numpy as np
 from flask import (Flask, render_template, request, redirect,
                    url_for, session, jsonify, send_from_directory)
 from flask.json.provider import DefaultJSONProvider
 from utils.symptom_validator import validate_symptoms
+
+
+_LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+logging.basicConfig(
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    format='%(asctime)s level=%(levelname)s logger=%(name)s message=%(message)s',
+)
+logger = logging.getLogger(__name__)
 
 
 class NumpyJSONProvider(DefaultJSONProvider):
@@ -46,9 +54,9 @@ auth_store    = AuthStore()
 session_store = SessionStore()
 
 # Pre-load ML pipeline at startup so first request doesn't trigger reloader
-print('[server] Pre-loading ML pipeline...')
+logger.info('Pre-loading ML pipeline')
 from pipeline.triage_graph import run_triage as _preload_triage  # noqa: F401
-print('[server] ML pipeline ready.')
+logger.info('ML pipeline ready')
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -307,8 +315,7 @@ def api_screen():
             'alerts':        (result.get('session_result', {}) or {}).get('deterioration_alerts') or [],
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception('Tier 1 pipeline error')
         return jsonify({'ok': False, 'error': f'Pipeline error: {str(e)}'}), 500
 
 

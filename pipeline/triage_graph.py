@@ -13,6 +13,7 @@ Graph:
 """
 
 import os
+import logging
 import numpy as np
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
@@ -37,6 +38,7 @@ _sound_agent     = None
 _session_agent   = None
 _session_store   = None
 _rule_engine     = RespiratoryRuleEngine()
+logger = logging.getLogger(__name__)
 
 
 def _get_symptom_agent():
@@ -130,7 +132,7 @@ _PNEU_SKIP = {
 # ── Graph nodes ───────────────────────────────────────────────────────────────
 
 def analyze_symptoms(state: TriageState) -> dict:
-    print("[triage] Analyzing symptoms (CAT-style) ...")
+    logger.info("Analyzing symptoms")
     info = state["patient_info"]
     try:
         result = _get_symptom_agent().predict(
@@ -149,7 +151,7 @@ def analyze_symptoms(state: TriageState) -> dict:
             sputum           = info.get("sputum", 0),
         )
     except Exception as e:
-        print(f"[triage] SymptomAgent error: {e}")
+        logger.exception("SymptomAgent error")
         result = {
             'agent': 'Symptom Agent', 'symptom_index': 0.0,
             'symptomatic_probability': 0.0,
@@ -166,7 +168,7 @@ def run_voice_agent(state: TriageState) -> dict:
     if not vowel_path or state.get("lung_audio_path", ""):
         return {"voice_result": {}, "voice_index": 0.0}
 
-    print("[triage] Analyzing voice biomarkers ...")
+    logger.info("Analyzing voice biomarkers")
     patient_id = state.get("patient_id", "anonymous")
 
     # Load baseline if exists
@@ -183,10 +185,10 @@ def run_voice_agent(state: TriageState) -> dict:
             store.save_baseline(patient_id,
                                 voice_features=result['features'],
                                 cough_embedding=None)
-            print(f"[triage] Voice baseline saved for {patient_id}")
+            logger.info("Voice baseline saved", extra={'patient_id': patient_id})
 
     except Exception as e:
-        print(f"[triage] VoiceAgent error: {e}")
+        logger.exception("VoiceAgent error")
         result = {'agent': 'Voice Agent', 'features': {},
                   'voice_index': 0.0, 'is_baseline': False, 'error': str(e)}
         voice_index = 0.0
@@ -201,7 +203,7 @@ def run_cough_drift(state: TriageState) -> dict:
     if not cough_path or lung_path:
         return {"drift_score": 0.0}
 
-    print("[triage] Computing cough drift ...")
+    logger.info("Computing cough drift")
     patient_id = state.get("patient_id", "anonymous")
     store      = _get_session_store()
     baseline   = store.get_baseline(patient_id)
@@ -218,7 +220,7 @@ def run_cough_drift(state: TriageState) -> dict:
 
         if has_cough_baseline:
             drift = compute_cough_drift(current_emb, baseline['cough_embedding'])
-            print(f"[triage] Cough drift: {drift:.4f}")
+            logger.info("Cough drift computed", extra={'drift_score': round(float(drift), 4)})
         else:
             drift = 0.0
             # Preserve existing voice features when saving cough baseline
@@ -226,10 +228,10 @@ def run_cough_drift(state: TriageState) -> dict:
             store.save_baseline(patient_id,
                                 voice_features=existing_vf,
                                 cough_embedding=current_emb)
-            print(f"[triage] Cough baseline saved for {patient_id}")
+            logger.info("Cough baseline saved", extra={'patient_id': patient_id})
 
     except Exception as e:
-        print(f"[triage] CoughDrift error: {e}")
+        logger.exception("CoughDrift error")
         drift = 0.0
 
     return {"drift_score": float(drift)}
@@ -239,11 +241,11 @@ def run_copd_agent(state: TriageState) -> dict:
     lung_path = state.get("lung_audio_path", "")
     if not lung_path:
         return {"copd_result": _COPD_SKIP}
-    print("[triage] Running COPD agent ...")
+    logger.info("Running COPD agent")
     try:
         result = _get_copd_agent().predict(lung_path)
     except Exception as e:
-        print(f"[triage] COPDAgent error: {e}")
+        logger.exception("COPDAgent error")
         result = {**_COPD_SKIP, 'error': str(e)}
     return {"copd_result": result}
 
@@ -252,11 +254,11 @@ def run_pneumonia_agent(state: TriageState) -> dict:
     lung_path = state.get("lung_audio_path", "")
     if not lung_path:
         return {"pneumonia_result": _PNEU_SKIP}
-    print("[triage] Running Pneumonia agent ...")
+    logger.info("Running Pneumonia agent")
     try:
         result = _get_pneumonia_agent().predict(lung_path)
     except Exception as e:
-        print(f"[triage] PneumoniaAgent error: {e}")
+        logger.exception("PneumoniaAgent error")
         result = {**_PNEU_SKIP, 'error': str(e)}
     return {"pneumonia_result": result}
 
@@ -267,11 +269,11 @@ def route_tier(state: TriageState) -> str:
 
 
 def analyze_lung(state: TriageState) -> dict:
-    print("[triage] Analyzing lung sounds (Tier 2) ...")
+    logger.info("Analyzing lung sounds")
     try:
         result = _get_sound_agent().predict(state["lung_audio_path"])
     except Exception as e:
-        print(f"[triage] SoundAgent error: {e}")
+        logger.exception("SoundAgent error")
         result = {'agent': 'Sound Agent', 'sound_type': 'Normal',
                   'confidence': 0.0, 'all_probabilities': {}, 'error': str(e)}
     return {"sound_result": result}
@@ -284,13 +286,20 @@ def compute_longitudinal(state: TriageState) -> dict:
     drift       = state.get("drift_score",   0.0)
 
     long_score  = compute_longitudinal_score(symptom_idx, voice_idx, drift)
-    print(f"[triage] Longitudinal score: {long_score:.3f} "
-          f"(sym={symptom_idx:.3f}, voice={voice_idx:.3f}, drift={drift:.3f})")
+    logger.info(
+        "Longitudinal score computed",
+        extra={
+            'longitudinal_score': round(float(long_score), 4),
+            'symptom_index': round(float(symptom_idx), 4),
+            'voice_index': round(float(voice_idx), 4),
+            'drift_score': round(float(drift), 4),
+        },
+    )
     return {"longitudinal_score": float(long_score)}
 
 
 def apply_rules(state: TriageState) -> dict:
-    print("[triage] Applying clinical rules ...")
+    logger.info("Applying clinical rules")
     lung_path = state.get("lung_audio_path", "")
     tier = 2 if (lung_path and lung_path.strip()) else 1
 
@@ -304,13 +313,19 @@ def apply_rules(state: TriageState) -> dict:
     )
     decision["tier"] = tier
 
-    print(f"[triage] Decision: {decision.get('diagnosis')} | "
-          f"Severity: {decision.get('severity')}")
+    logger.info(
+        "Triage decision computed",
+        extra={
+            'diagnosis': decision.get('diagnosis', ''),
+            'severity': decision.get('severity', ''),
+            'tier': tier,
+        },
+    )
     return {"triage_decision": decision, "tier": tier}
 
 
 def record_session(state: TriageState) -> dict:
-    print("[triage] Recording session ...")
+    logger.info("Recording session")
     try:
         tier      = state.get("tier", 1)
         copd_conf = state.get("copd_result", {}).get("probability", 0.0)
@@ -351,7 +366,7 @@ def record_session(state: TriageState) -> dict:
 
         if alerts:
             for a in alerts:
-                print(f"[triage] *** {a['message']}")
+                logger.warning("Deterioration alert", extra={'alert_message': a.get('message', '')})
 
         session_result = {
             'agent':                'Session Memory Agent',
@@ -361,7 +376,7 @@ def record_session(state: TriageState) -> dict:
             'total_sessions':       len(history),
         }
     except Exception as e:
-        print(f"[triage] SessionAgent error: {e}")
+        logger.exception("SessionAgent error")
         session_result = {
             'agent': 'Session Memory Agent', 'session_saved': False,
             'deterioration_alerts': None, 'session_history': [],

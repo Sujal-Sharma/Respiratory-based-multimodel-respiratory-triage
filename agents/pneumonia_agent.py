@@ -6,6 +6,7 @@ Identical architecture to COPDAgent — different trained weights.
 
 import os
 import sys
+import logging
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -13,6 +14,7 @@ from models.mlp_classifier import BinaryMLPClassifier
 from models.opera_encoder import OPERAEncoder
 
 _DEFAULT_MODEL_PATH = './saved_models/pneumonia_opera_mlp.pt'
+logger = logging.getLogger(__name__)
 
 
 class PneumoniaAgent:
@@ -28,7 +30,7 @@ class PneumoniaAgent:
 
     def __init__(self,
                  model_path: str = _DEFAULT_MODEL_PATH,
-                 device: str = 'cuda'):
+                 device: str = 'cpu'):
         self.device = device
 
         self.encoder = OPERAEncoder(pretrain='operaCT')
@@ -44,7 +46,10 @@ class PneumoniaAgent:
         self.classifier.load_state_dict(ckpt['model_state_dict'])
         self.classifier.eval()
 
-        print(f"[PneumoniaAgent] Loaded {model_path} | threshold={self.threshold:.3f}")
+        logger.info(
+            "Pneumonia model loaded",
+            extra={'model_path': model_path, 'threshold': round(float(self.threshold), 4)},
+        )
 
     def predict(self, audio_path: str) -> dict:
         """
@@ -81,7 +86,8 @@ class PneumoniaAgent:
                 'error':          None,
             }
 
-        except Exception as e:
+        except (FileNotFoundError, OSError, ValueError, RuntimeError) as e:
+            logger.error("Pneumonia inference failed", extra={'error': str(e)})
             return {
                 'agent':          self.AGENT_NAME,
                 'disease':        self.DISEASE,
@@ -97,9 +103,9 @@ class PneumoniaAgent:
 if __name__ == '__main__':
     import sys
     if len(sys.argv) < 2:
-        print("Usage: python agents/pneumonia_agent.py <audio_path>")
+        logger.error("Usage: python agents/pneumonia_agent.py <audio_path>")
         sys.exit(1)
     agent  = PneumoniaAgent()
     result = agent.predict(sys.argv[1])
     for k, v in result.items():
-        print(f"  {k}: {v}")
+        logger.info("Prediction field", extra={'field': k, 'value': v})

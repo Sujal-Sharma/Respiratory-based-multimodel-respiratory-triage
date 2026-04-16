@@ -19,6 +19,9 @@ Returns:
 import os
 import json
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Try to load .env manually (no python-dotenv required)
 def _load_env_key():
@@ -95,7 +98,7 @@ def validate_symptoms(raw_text: str) -> dict:
 
     api_key = _load_env_key()
     if not api_key:
-        print("[symptom_validator] No GROQ_API_KEY found — skipping LLM validation")
+        logger.info("No GROQ_API_KEY found; skipping LLM validation")
         return default
 
     # Split input into individual symptoms
@@ -126,7 +129,7 @@ def validate_symptoms(raw_text: str) -> dict:
         # Extract JSON from response (handle markdown code blocks)
         json_match = re.search(r'\{[\s\S]*\}', content)
         if not json_match:
-            print(f"[symptom_validator] Could not parse JSON from: {content[:200]}")
+            logger.warning("Could not parse JSON from LLM response")
             return default
 
         data = json.loads(json_match.group())
@@ -141,7 +144,14 @@ def validate_symptoms(raw_text: str) -> dict:
         boost   = max(0.0, min(0.25, boost))   # hard cap
         summary = data.get('summary', '')
 
-        print(f"[symptom_validator] Valid: {valid} | Invalid: {[i['symptom'] for i in invalid]} | Boost: {boost:.3f}")
+        logger.info(
+            "Symptoms validated",
+            extra={
+                'n_valid': len(valid),
+                'n_invalid': len(invalid),
+                'boost': round(float(boost), 4),
+            },
+        )
 
         return {
             'valid':       valid,
@@ -152,5 +162,5 @@ def validate_symptoms(raw_text: str) -> dict:
         }
 
     except Exception as e:
-        print(f"[symptom_validator] Error: {e}")
+        logger.exception("Symptom validator error")
         return default

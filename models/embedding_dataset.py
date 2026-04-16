@@ -11,8 +11,11 @@ Label columns:
 
 import numpy as np
 import pandas as pd
+import logging
 import torch
 from torch.utils.data import Dataset
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingDataset(Dataset):
@@ -41,8 +44,18 @@ class EmbeddingDataset(Dataset):
         )]
         self.df = df.reset_index(drop=True)
 
-        print(f"[EmbeddingDataset] {csv_path}: {len(self.df)} samples")
-        print(f"  Label distribution:\n{self.df[label_col].value_counts().to_string()}")
+        logger.info(
+            "Embedding dataset loaded",
+            extra={
+                'csv_path': csv_path,
+                'sample_count': int(len(self.df)),
+                'label_col': label_col,
+            },
+        )
+        logger.debug(
+            "Label distribution",
+            extra={'distribution': self.df[label_col].value_counts().to_dict()},
+        )
 
     def __len__(self) -> int:
         return len(self.df)

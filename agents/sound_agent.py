@@ -8,6 +8,7 @@ Used only when a lung recording is provided (clinical setting).
 
 import os
 import sys
+import logging
 import torch
 import torch.nn as nn
 
@@ -15,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from models.opera_encoder import OPERAEncoder
 
 _DEFAULT_MODEL_PATH = './saved_models/sound_opera_mlp_3class.pt'
+logger = logging.getLogger(__name__)
 
 SOUND_LABELS = {0: 'Normal', 1: 'Crackle', 2: 'Wheeze'}
 
@@ -45,7 +47,7 @@ class SoundAgent:
 
     AGENT_NAME = 'Sound Agent'
 
-    def __init__(self, model_path: str = _DEFAULT_MODEL_PATH, device: str = 'cuda'):
+    def __init__(self, model_path: str = _DEFAULT_MODEL_PATH, device: str = 'cpu'):
         self.device = device
         self.encoder = OPERAEncoder(pretrain='operaCT')
 
@@ -59,7 +61,7 @@ class SoundAgent:
         self.classifier.load_state_dict(ckpt['model_state_dict'])
         self.classifier.eval()
 
-        print(f"[SoundAgent] Loaded {model_path} (3-class: Normal/Crackle/Wheeze)")
+        logger.info("Sound model loaded", extra={'model_path': model_path})
 
     def predict(self, audio_path: str) -> dict:
         try:
@@ -85,7 +87,8 @@ class SoundAgent:
                 'error': None,
             }
 
-        except Exception as e:
+        except (FileNotFoundError, OSError, ValueError, RuntimeError) as e:
+            logger.error("Sound inference failed", extra={'error': str(e)})
             return {
                 'agent':      self.AGENT_NAME,
                 'sound_type': 'Normal',
@@ -97,9 +100,9 @@ class SoundAgent:
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Usage: python agents/sound_agent.py <audio_path>")
+        logger.error("Usage: python agents/sound_agent.py <audio_path>")
         sys.exit(1)
     agent  = SoundAgent()
     result = agent.predict(sys.argv[1])
     for k, v in result.items():
-        print(f"  {k}: {v}")
+        logger.info("Prediction field", extra={'field': k, 'value': v})

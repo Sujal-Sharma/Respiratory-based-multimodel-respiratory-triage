@@ -11,10 +11,13 @@ OPERA-CT output: 768-dim L2-normalised embedding per audio clip.
 
 import os
 import sys
+import logging
 import numpy as np
 import torch
 import librosa
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger(__name__)
 
 OPERA_REPO = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'OPERA')
 if OPERA_REPO not in sys.path:
@@ -115,8 +118,16 @@ class OPERAEncoder:
         self.device     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self._model = self._load_model()
-        print(f"[OPERAEncoder] {pretrain} on {self.device} | "
-              f"batch={batch_size} | workers={n_workers} | dim={self.dim}")
+        logger.info(
+            "OPERA encoder initialized",
+            extra={
+                'pretrain': pretrain,
+                'device': str(self.device),
+                'batch_size': int(batch_size),
+                'n_workers': int(n_workers),
+                'embedding_dim': int(self.dim),
+            },
+        )
 
     def _load_model(self):
         orig_dir = os.getcwd()
@@ -207,12 +218,14 @@ class OPERAEncoder:
                 for local_i, global_i in enumerate(batch_idx):
                     all_embeddings[global_i] = embs[local_i]
             except Exception as e:
+                logger.warning("Batch inference failed, falling back to single-item inference")
                 # Fall back to one-by-one for this batch
                 for global_i, spec in zip(batch_idx, batch_specs):
                     try:
                         emb = self._infer_batch([spec])
                         all_embeddings[global_i] = emb[0]
                     except Exception:
+                        logger.exception("Single-item inference fallback failed")
                         pass  # stays as zero vector
 
         # L2 normalise (skip zero rows)

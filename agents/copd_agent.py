@@ -9,6 +9,7 @@ Standard output dict is consumed by fusion_agent and rule_engine.
 
 import os
 import sys
+import logging
 import numpy as np
 import torch
 
@@ -17,6 +18,7 @@ from models.mlp_classifier import BinaryMLPClassifier
 from models.opera_encoder import OPERAEncoder
 
 _DEFAULT_MODEL_PATH = './saved_models/copd_opera_mlp.pt'
+logger = logging.getLogger(__name__)
 
 
 class COPDAgent:
@@ -32,7 +34,7 @@ class COPDAgent:
 
     def __init__(self,
                  model_path: str = _DEFAULT_MODEL_PATH,
-                 device: str = 'cuda'):
+                 device: str = 'cpu'):
         self.device = device
 
         # OPERA encoder (checkpoint auto-downloads from HuggingFace)
@@ -50,7 +52,10 @@ class COPDAgent:
         self.classifier.load_state_dict(ckpt['model_state_dict'])
         self.classifier.eval()
 
-        print(f"[COPDAgent] Loaded {model_path} | threshold={self.threshold:.3f}")
+        logger.info(
+            "COPD model loaded",
+            extra={'model_path': model_path, 'threshold': round(float(self.threshold), 4)},
+        )
 
     def predict(self, audio_path: str) -> dict:
         """
@@ -91,7 +96,8 @@ class COPDAgent:
                 'error':          None,
             }
 
-        except Exception as e:
+        except (FileNotFoundError, OSError, ValueError, RuntimeError) as e:
+            logger.error("COPD inference failed", extra={'error': str(e)})
             return {
                 'agent':          self.AGENT_NAME,
                 'disease':        self.DISEASE,
@@ -107,9 +113,9 @@ class COPDAgent:
 if __name__ == '__main__':
     import sys
     if len(sys.argv) < 2:
-        print("Usage: python agents/copd_agent.py <audio_path>")
+        logger.error("Usage: python agents/copd_agent.py <audio_path>")
         sys.exit(1)
     agent  = COPDAgent()
     result = agent.predict(sys.argv[1])
     for k, v in result.items():
-        print(f"  {k}: {v}")
+        logger.info("Prediction field", extra={'field': k, 'value': v})
