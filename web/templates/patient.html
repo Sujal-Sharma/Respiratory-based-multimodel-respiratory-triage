@@ -1,0 +1,655 @@
+{% extends "base.html" %}
+{% block title %}Patient Portal — RespiTriage AI{% endblock %}
+
+{% block sidebar_name %}{{ user.full_name or user.username }}{% endblock %}
+{% block sidebar_role %}Patient · {{ patient_id }}{% endblock %}
+
+{% block sidebar_nav %}
+<button class="sidebar-nav-item active" id="nav-screen" onclick="switchTab('screen')">
+  <i class="bi bi-heart-pulse"></i> Self-Screen
+</button>
+<button class="sidebar-nav-item" id="nav-history" onclick="switchTab('history')">
+  <i class="bi bi-graph-up"></i> My History
+</button>
+<button class="sidebar-nav-item" id="nav-profile" onclick="switchTab('profile')">
+  <i class="bi bi-person-circle"></i> My Profile
+</button>
+{% endblock %}
+
+{% block content %}
+
+<!-- ══ SELF-SCREEN ══════════════════════════════════════════════════════════ -->
+<div id="tab-screen">
+  <div class="page-header">
+    <span class="page-header-icon">🩺</span>
+    <div>
+      <h1>Symptom Self-Screening</h1>
+      <p>Tier 1 AI-powered respiratory assessment</p>
+    </div>
+  </div>
+
+  {% if alerts %}
+  {% for a in alerts %}
+  <div class="alert alert-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>{{ a.message }}</div>
+  {% endfor %}
+  {% endif %}
+
+  <form id="screen-form" enctype="multipart/form-data">
+    <div class="row g-4">
+      <!-- Left: symptoms -->
+      <div class="col-lg-7">
+        <div class="card p-0 mb-4">
+          <div class="card-header-styled"><i class="bi bi-person-check me-2"></i>Patient Information</div>
+          <div class="p-4">
+            <div class="row g-3 mb-3">
+              <div class="col-6">
+                <label class="form-label">Age</label>
+                <input type="number" name="age" class="form-control" min="1" max="120"
+                       value="{{ profile.age or 25 }}"/>
+              </div>
+              <div class="col-6">
+                <label class="form-label">Gender</label>
+                <select name="gender" class="form-select">
+                  <option value="male"   {% if (profile.gender or 'male')=='male'   %}selected{% endif %}>Male</option>
+                  <option value="female" {% if profile.gender=='female' %}selected{% endif %}>Female</option>
+                  <option value="other"  {% if profile.gender=='other'  %}selected{% endif %}>Other</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="card-header-styled mb-3" style="border-radius:8px;"><i class="bi bi-clipboard2-pulse me-2"></i>Symptoms</div>
+            <div class="row g-2 mb-3">
+              <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="fever" id="chk-fever" value="true"/><label class="form-check-label" for="chk-fever">Fever / Muscle Pain</label></div></div>
+              <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="wheezing" id="chk-wheeze" value="true"/><label class="form-check-label" for="chk-wheeze">Wheezing</label></div></div>
+              <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="resp_cond" id="chk-resp" value="true" {% if profile.respiratory_condition %}checked{% endif %}/><label class="form-check-label" for="chk-resp">Known Respiratory Condition</label></div></div>
+              <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="congestion" id="chk-cong" value="true"/><label class="form-check-label" for="chk-cong">Nasal Congestion</label></div></div>
+            </div>
+
+            <label class="form-label">Cough Severity <span id="cough-val" class="text-primary fw-600">0.3</span></label>
+            <input type="range" name="cough_sev" class="form-range mb-3" min="0" max="1" step="0.1" value="0.3"
+                   oninput="document.getElementById('cough-val').textContent=parseFloat(this.value).toFixed(1)"/>
+
+            <div class="card-header-styled mb-3" style="border-radius:8px;"><i class="bi bi-lungs me-2"></i>Breathing & Functional Status</div>
+            <label class="form-label">Breathlessness Level (mMRC)</label>
+            <select name="dyspnea_level" class="form-select mb-3">
+              <option value="0">0 — None</option>
+              <option value="1">1 — Only on strenuous activity</option>
+              <option value="2">2 — Walking fast or uphill</option>
+              <option value="3">3 — Stops after 100m on flat</option>
+              <option value="4">4 — Too breathless to leave house</option>
+            </select>
+
+            <div class="row g-3">
+              <div class="col-4">
+                <label class="form-label">Chest Tightness <span id="ct-val" class="text-primary fw-600">0</span></label>
+                <input type="range" name="chest_tightness" class="form-range" min="0" max="4" step="1" value="0"
+                       oninput="document.getElementById('ct-val').textContent=this.value"/>
+              </div>
+              <div class="col-4">
+                <label class="form-label">Sleep Quality <span id="sq-val" class="text-primary fw-600">0</span></label>
+                <input type="range" name="sleep_quality" class="form-range" min="0" max="4" step="1" value="0"
+                       oninput="document.getElementById('sq-val').textContent=this.value"/>
+              </div>
+              <div class="col-4">
+                <label class="form-label">Energy Level <span id="el-val" class="text-primary fw-600">0</span></label>
+                <input type="range" name="energy_level" class="form-range" min="0" max="4" step="1" value="0"
+                       oninput="document.getElementById('el-val').textContent=this.value"/>
+              </div>
+            </div>
+            <label class="form-label mt-3">Sputum / Phlegm</label>
+            <select name="sputum" class="form-select">
+              <option value="0">None</option>
+              <option value="1">Clear</option>
+              <option value="2">Coloured</option>
+              <option value="3">Thick / Dark</option>
+            </select>
+
+            <!-- ── Additional Free-Text Symptoms ── -->
+            <div class="mt-4" style="border-top:1px solid #e2e8f0;padding-top:1rem;">
+              <div class="card-header-styled mb-2" style="border-radius:8px;">
+                <i class="bi bi-pencil-square me-2"></i>Additional Symptoms
+                <span style="font-size:.72rem;font-weight:400;color:#94a3b8;margin-left:.5rem;">AI-validated · optional</span>
+              </div>
+              <label class="form-label" style="font-size:.85rem;">
+                Describe any other symptoms you're experiencing
+              </label>
+              <div class="d-flex gap-2">
+                <textarea id="extra-symptoms-input" class="form-control" rows="2"
+                  placeholder="e.g. sore throat, night sweats, loss of appetite  (comma-separated)"
+                  style="font-size:.88rem;resize:vertical;"></textarea>
+              </div>
+              <div class="d-flex align-items-center gap-2 mt-2 flex-wrap">
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="validate-btn" onclick="validateSymptoms()">
+                  <i class="bi bi-shield-check me-1"></i>Validate with AI
+                </button>
+                <button type="button" class="btn btn-outline-danger btn-sm" id="clear-all-btn" onclick="clearAllSymptoms()" style="display:none;">
+                  <i class="bi bi-x-circle me-1"></i>Clear All
+                </button>
+                <span id="validate-spinner" style="display:none;font-size:.82rem;color:#64748b;">
+                  <span class="spinner-border spinner-border-sm me-1"></span>Checking with AI...
+                </span>
+              </div>
+
+              <!-- Validation results — individual removable tags -->
+              <div id="validation-results" style="display:none;margin-top:.85rem;">
+
+                <!-- Accepted symptoms as removable tags -->
+                <div id="valid-symptoms-box" style="display:none;margin-bottom:.5rem;">
+                  <div style="font-size:.75rem;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.35rem;">
+                    <i class="bi bi-check-circle-fill me-1"></i>Accepted — contributing to score
+                  </div>
+                  <div id="valid-tags" class="d-flex flex-wrap gap-2"></div>
+                </div>
+
+                <!-- Rejected symptoms -->
+                <div id="invalid-symptoms-box" style="display:none;margin-bottom:.5rem;">
+                  <div style="font-size:.75rem;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.35rem;">
+                    <i class="bi bi-exclamation-triangle-fill me-1"></i>Not recognised as medical symptoms
+                  </div>
+                  <div id="invalid-tags" class="d-flex flex-wrap gap-2"></div>
+                </div>
+
+                <div id="validation-summary" style="font-size:.8rem;color:#64748b;margin-top:.25rem;"></div>
+              </div>
+
+              <!-- Hidden field carries validated boost score -->
+              <input type="hidden" name="extra_symptom_boost" id="extra-symptom-boost" value="0"/>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: audio -->
+      <div class="col-lg-5">
+        <div class="card p-0 mb-4">
+          <div class="card-header-styled"><i class="bi bi-mic me-2"></i>Voice &amp; Cough Recordings</div>
+          <div class="p-4">
+            <div class="alert alert-info py-2" style="font-size:.83rem;">
+              <strong>Vowel recording (recommended)</strong><br/>
+              Say <strong>"Ahhh"</strong> clearly for 5 seconds. Captures jitter, shimmer &amp; HNR for longitudinal tracking.<br/>
+              <span class="text-muted">First session saves your baseline. Future sessions measure change.</span>
+            </div>
+            <label class="form-label">Vowel Recording ('Ahhh' — 5 sec)</label>
+            <input type="file" name="vowel_file" id="vowel-file" class="form-control mb-2"
+                   accept=".wav,.mp3,.webm,.ogg,.m4a,.flac,.mp4"/>
+            <audio id="vowel-audio" controls class="w-100 mb-3" style="display:none;height:36px;"></audio>
+
+            <hr/>
+            <label class="form-label text-muted">Cough Recording <small>(optional)</small></label>
+            <input type="file" name="cough_file" id="cough-file" class="form-control mb-2"
+                   accept=".wav,.mp3,.webm,.ogg,.m4a,.flac,.mp4"/>
+            <audio id="cough-audio" controls class="w-100" style="display:none;height:36px;"></audio>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary w-100 py-3 fs-6">
+          <i class="bi bi-cpu me-2"></i>Run Screening
+        </button>
+      </div>
+    </div>
+  </form>
+
+  <!-- Result -->
+  <div id="result-section" style="display:none;" class="mt-4">
+    <hr/>
+    <h5 class="fw-700 mb-3">Screening Result</h5>
+    <div class="row g-3 mb-3">
+      <div class="col-md-4"><div class="result-sev" id="res-sev-box">—</div></div>
+      <div class="col-md-4"><div class="metric-card text-center"><div class="metric-label">Risk Score</div><div class="metric-value" id="res-risk">—</div><div class="metric-sub" id="res-interp">—</div></div></div>
+      <div class="col-md-4"><div class="metric-card text-center"><div class="metric-label">Referral</div><div class="metric-value fs-5" id="res-referral">—</div></div></div>
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col-md-4"><div class="metric-card"><div class="metric-label">Symptom Index</div><div class="metric-value" id="res-sym">—</div><div class="progress mt-2"><div class="progress-bar bg-danger" id="res-sym-bar"></div></div></div></div>
+      <div class="col-md-4"><div class="metric-card"><div class="metric-label">Voice Index</div><div class="metric-value" id="res-voice">—</div><div class="progress mt-2"><div class="progress-bar bg-primary" id="res-voice-bar"></div></div></div></div>
+      <div class="col-md-4"><div class="metric-card"><div class="metric-label">Cough Drift</div><div class="metric-value" id="res-drift">—</div><div class="progress mt-2"><div class="progress-bar bg-warning" id="res-drift-bar"></div></div></div></div>
+    </div>
+    <div class="card p-3 mb-3">
+      <div class="fw-600 mb-1 text-muted" style="font-size:.8rem;">CLINICAL REASONING</div>
+      <div id="res-reasoning" style="font-size:.9rem;"></div>
+    </div>
+    <div class="card p-3 mb-3">
+      <div class="fw-600 mb-1 text-muted" style="font-size:.8rem;">RECOMMENDED ACTION</div>
+      <div id="res-action" style="font-size:.9rem;" class="text-success fw-500"></div>
+    </div>
+    <div id="voice-biomarkers" style="display:none;">
+      <div class="card-header-styled mb-2" style="border-radius:8px;">Voice Biomarkers</div>
+      <div class="row g-2" id="biomarker-row"></div>
+    </div>
+    <div id="baseline-notice" style="display:none;" class="alert alert-info mt-2"></div>
+    <div id="result-alerts"></div>
+  </div>
+</div>
+
+<!-- ══ HISTORY ══════════════════════════════════════════════════════════════ -->
+<div id="tab-history" style="display:none;">
+  <div class="page-header">
+    <span class="page-header-icon">📈</span>
+    <div><h1>My Screening History</h1><p>Longitudinal respiratory risk trend</p></div>
+  </div>
+
+  {% if history %}
+  <div class="row g-3 mb-4">
+    <div class="col"><div class="metric-card text-center"><div class="metric-label">Total Sessions</div><div class="metric-value">{{ history|length }}</div></div></div>
+    <div class="col"><div class="metric-card text-center"><div class="metric-label">Latest Severity</div><div class="metric-value fs-5"><span class="sev-badge sev-{{ history[0].severity }}">{{ history[0].severity }}</span></div></div></div>
+    <div class="col"><div class="metric-card text-center"><div class="metric-label">Latest Risk</div><div class="metric-value">{{ "%.0f%%"|format(history[0].get('longitudinal_score',0)*100) }}</div></div></div>
+    <div class="col"><div class="metric-card text-center"><div class="metric-label">Avg COPD Risk</div><div class="metric-value">{{ "%.0f%%"|format((history|map(attribute='copd_confidence')|list|sum / history|length)*100) }}</div></div></div>
+    <div class="col"><div class="metric-card text-center"><div class="metric-label">Avg Pneu Risk</div><div class="metric-value">{{ "%.0f%%"|format((history|map(attribute='pneu_confidence')|list|sum / history|length)*100) }}</div></div></div>
+  </div>
+
+  {% if alerts %}{% for a in alerts %}
+  <div class="alert alert-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>{{ a.message }}</div>
+  {% endfor %}{% endif %}
+
+  <div class="card p-3 mb-4">
+    <div style="position:relative;height:260px;">
+      <canvas id="historyChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card p-0">
+    <div class="card-header-styled"><i class="bi bi-table me-2"></i>Session Log</div>
+    <div class="table-responsive">
+      <table class="table table-striped mb-0">
+        <thead>
+          <tr>
+            <th>Timestamp</th><th>Tier</th><th>Severity</th><th>Diagnosis</th>
+            <th>Risk Score</th><th>Symptom</th><th>Voice</th><th>COPD</th><th>Pneu</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in history %}
+          <tr>
+            <td>{{ s.timestamp[:16] }}</td>
+            <td><span class="badge bg-secondary">T{{ s.tier }}</span></td>
+            <td><span class="sev-badge sev-{{ s.severity }}">{{ s.severity }}</span></td>
+            <td>{{ s.diagnosis or '—' }}</td>
+            <td>{{ "%.0f%%"|format(s.get('longitudinal_score',0)*100) }}</td>
+            <td>{{ "%.0f%%"|format(s.get('symptom_index',0)*100) }}</td>
+            <td>{{ "%.0f%%"|format(s.get('voice_index',0)*100) }}</td>
+            <td>{{ "%.0f%%"|format(s.copd_confidence*100) }}</td>
+            <td>{{ "%.0f%%"|format(s.pneu_confidence*100) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-info"><i class="bi bi-info-circle me-2"></i>No sessions yet. Run a Self-Screen first.</div>
+  {% endif %}
+</div>
+
+<!-- ══ PROFILE ══════════════════════════════════════════════════════════════ -->
+<div id="tab-profile" style="display:none;">
+  <div class="page-header">
+    <span class="page-header-icon">👤</span>
+    <div><h1>My Profile</h1><p>Medical history &amp; voice baseline</p></div>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <div class="card p-0">
+        <div class="card-header-styled"><i class="bi bi-person-lines-fill me-2"></i>Medical Profile</div>
+        <div class="p-4">
+          <div id="profile-alert"></div>
+          <div class="row g-3 mb-3">
+            <div class="col-6">
+              <label class="form-label">Age</label>
+              <input type="number" id="p-age" class="form-control" min="1" max="120" value="{{ profile.age or 25 }}"/>
+            </div>
+            <div class="col-6">
+              <label class="form-label">Gender</label>
+              <select id="p-gender" class="form-select">
+                <option value="male"   {% if (profile.gender or 'male')=='male'   %}selected{% endif %}>Male</option>
+                <option value="female" {% if profile.gender=='female' %}selected{% endif %}>Female</option>
+                <option value="other"  {% if profile.gender=='other'  %}selected{% endif %}>Other</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" id="p-resp" {% if profile.respiratory_condition %}checked{% endif %}/>
+            <label class="form-check-label" for="p-resp">Known Respiratory Condition</label>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="p-smoke" {% if profile.smoking %}checked{% endif %}/>
+            <label class="form-check-label" for="p-smoke">Smoker / Ex-smoker</label>
+          </div>
+          <label class="form-label">Medical Notes (optional)</label>
+          <textarea id="p-notes" class="form-control mb-3" rows="3">{{ profile.notes or '' }}</textarea>
+          <button class="btn btn-primary w-100" onclick="saveProfile()">
+            <i class="bi bi-floppy me-2"></i>Save Profile
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card p-0">
+        <div class="card-header-styled"><i class="bi bi-soundwave me-2"></i>Voice Baseline Status</div>
+        <div class="p-4">
+          {% if baseline and baseline.voice_features %}
+          <div class="alert alert-success py-2">
+            <i class="bi bi-check-circle me-2"></i>Baseline established on {{ baseline.created_at[:10] }}
+          </div>
+          <div class="row g-2">
+            <div class="col-4"><div class="metric-card text-center"><div class="metric-label">Jitter</div><div class="metric-value fs-5">{{ "%.4f"|format(baseline.voice_features.get('jitter',0)) }}</div></div></div>
+            <div class="col-4"><div class="metric-card text-center"><div class="metric-label">Shimmer</div><div class="metric-value fs-5">{{ "%.4f"|format(baseline.voice_features.get('shimmer',0)) }}</div></div></div>
+            <div class="col-4"><div class="metric-card text-center"><div class="metric-label">HNR (dB)</div><div class="metric-value fs-5">{{ "%.1f"|format(baseline.voice_features.get('hnr',0)) }}</div></div></div>
+          </div>
+          {% else %}
+          <div class="alert alert-info py-2" style="font-size:.85rem;">
+            <i class="bi bi-mic me-2"></i>No voice baseline yet.<br/>
+            Record a vowel ("Ahhh") during your next Self-Screen.
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ── Tab switching ──
+function switchTab(name) {
+  ['screen','history','profile'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t===name ? '' : 'none';
+    document.getElementById('nav-'+t).classList.toggle('active', t===name);
+  });
+}
+
+// ── Audio preview ──
+['vowel','cough'].forEach(k => {
+  document.getElementById(k+'-file').addEventListener('change', function() {
+    const el = document.getElementById(k+'-audio');
+    if (this.files[0]) { el.src = URL.createObjectURL(this.files[0]); el.style.display=''; }
+    else el.style.display='none';
+  });
+});
+
+// ── Symptom tag store: { symptom: string, boost: float } ──
+let _validatedSymptoms = [];   // array of { label, boost }
+let _totalBoost        = 0.0;
+
+function _recalcBoost() {
+  _totalBoost = _validatedSymptoms.reduce((s, x) => s + x.boost, 0);
+  _totalBoost = Math.min(_totalBoost, 0.25);
+  document.getElementById('extra-symptom-boost').value = _totalBoost.toFixed(4);
+}
+
+function removeValidSymptom(label) {
+  _validatedSymptoms = _validatedSymptoms.filter(x => x.label !== label);
+  _recalcBoost();
+  _renderValidTags();
+  if (_validatedSymptoms.length === 0) {
+    document.getElementById('valid-symptoms-box').style.display = 'none';
+    _checkResultsEmpty();
+  }
+}
+
+function _renderValidTags() {
+  const container = document.getElementById('valid-tags');
+  container.innerHTML = _validatedSymptoms.map(x => `
+    <span style="
+      display:inline-flex;align-items:center;gap:.3rem;
+      background:#dcfce7;border:1px solid #86efac;
+      border-radius:999px;padding:.25rem .7rem;
+      font-size:.8rem;font-weight:600;color:#16a34a;">
+      <i class="bi bi-check-circle-fill" style="font-size:.7rem;"></i>
+      ${x.label}
+      <button type="button" onclick="removeValidSymptom('${x.label.replace(/'/g,"\\'")}')"
+        style="background:none;border:none;padding:0;margin-left:.15rem;
+               cursor:pointer;color:#16a34a;font-size:.85rem;line-height:1;"
+        title="Remove this symptom">
+        <i class="bi bi-x-circle-fill"></i>
+      </button>
+    </span>`).join('');
+}
+
+function _checkResultsEmpty() {
+  const vb = document.getElementById('valid-symptoms-box');
+  const ib = document.getElementById('invalid-symptoms-box');
+  if (vb.style.display === 'none' && ib.style.display === 'none') {
+    document.getElementById('validation-results').style.display = 'none';
+    document.getElementById('clear-all-btn').style.display = 'none';
+  }
+}
+
+function clearAllSymptoms() {
+  _validatedSymptoms = [];
+  _totalBoost = 0.0;
+  document.getElementById('extra-symptom-boost').value = '0';
+  document.getElementById('extra-symptoms-input').value = '';
+  document.getElementById('validation-results').style.display = 'none';
+  document.getElementById('valid-symptoms-box').style.display = 'none';
+  document.getElementById('invalid-symptoms-box').style.display = 'none';
+  document.getElementById('validation-summary').textContent = '';
+  document.getElementById('clear-all-btn').style.display = 'none';
+  document.getElementById('valid-tags').innerHTML = '';
+  document.getElementById('invalid-tags').innerHTML = '';
+}
+
+// ── Validate free-text symptoms via LLM ──
+async function validateSymptoms() {
+  const text = document.getElementById('extra-symptoms-input').value.trim();
+  if (!text) return;
+
+  document.getElementById('validate-btn').disabled = true;
+  document.getElementById('validate-spinner').style.display = '';
+  document.getElementById('validation-results').style.display = 'none';
+
+  try {
+    const res  = await fetch('/api/validate-symptoms', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({symptoms_text: text})
+    });
+    const data = await res.json();
+
+    document.getElementById('validate-spinner').style.display = 'none';
+    document.getElementById('validate-btn').disabled = false;
+    document.getElementById('validation-results').style.display = '';
+    document.getElementById('clear-all-btn').style.display = '';
+
+    const validBox   = document.getElementById('valid-symptoms-box');
+    const invalidBox = document.getElementById('invalid-symptoms-box');
+    const summary    = document.getElementById('validation-summary');
+
+    // Merge new valid symptoms into store (avoid duplicates)
+    if (data.valid && data.valid.length > 0) {
+      const perSymBoost = (data.boost || 0) / data.valid.length;
+      data.valid.forEach(label => {
+        if (!_validatedSymptoms.find(x => x.label === label)) {
+          _validatedSymptoms.push({ label, boost: perSymBoost });
+        }
+      });
+      _recalcBoost();
+      _renderValidTags();
+      validBox.style.display = '';
+    } else {
+      validBox.style.display = _validatedSymptoms.length > 0 ? '' : 'none';
+    }
+
+    // Render invalid tags (no removal needed — they're just info)
+    if (data.invalid && data.invalid.length > 0) {
+      invalidBox.style.display = '';
+      document.getElementById('invalid-tags').innerHTML = data.invalid.map(i => `
+        <span style="
+          display:inline-flex;align-items:center;gap:.3rem;
+          background:#fef3c7;border:1px solid #fcd34d;
+          border-radius:999px;padding:.25rem .7rem;
+          font-size:.8rem;font-weight:600;color:#92400e;"
+          title="${i.reason}">
+          <i class="bi bi-x-circle-fill" style="font-size:.7rem;"></i>
+          ${i.symptom}
+        </span>`).join('');
+    } else {
+      invalidBox.style.display = 'none';
+    }
+
+    summary.textContent = data.summary || '';
+
+    // Clear textarea after successful validation
+    document.getElementById('extra-symptoms-input').value = '';
+
+  } catch(err) {
+    document.getElementById('validate-spinner').style.display = 'none';
+    document.getElementById('validate-btn').disabled = false;
+    console.error('Validation error:', err);
+  }
+}
+
+// ── Screen form submit ──
+document.getElementById('screen-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  showSpinner('Running AI screening...');
+  const fd = new FormData(this);
+  // Build symptoms list
+  const symptoms = [];
+  if (fd.get('fever')==='true') symptoms.push('fever/muscle pain');
+  if (parseInt(fd.get('dyspnea_level'))>=2) symptoms.push('difficulty breathing');
+  if (fd.get('wheezing')==='true') symptoms.push('wheezing');
+  if (fd.get('resp_cond')==='true') symptoms.push('respiratory condition');
+  if (fd.get('congestion')==='true') symptoms.push('nasal congestion');
+  // Add LLM-validated extra symptoms
+  _validatedSymptoms.forEach(x => symptoms.push(x.label));
+  fd.set('symptoms', JSON.stringify(symptoms));
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 300000); // 5 min timeout
+    const res = await fetch('/api/screen', {method:'POST', body:fd, signal:controller.signal});
+    clearTimeout(timer);
+    const d = await res.json();
+    hideSpinner();
+    if (!d.ok) { alert(d.error||'Screening failed'); return; }
+    renderResult(d);
+  } catch(err) {
+    hideSpinner();
+    if (err.name === 'AbortError') alert('Request timed out. The pipeline took too long.');
+    else alert('Error: '+err.message);
+  }
+});
+
+function renderResult(d) {
+  const sec = document.getElementById('result-section');
+  sec.style.display = '';
+  sec.scrollIntoView({behavior:'smooth', block:'start'});
+
+  const sev = d.severity;
+  const box = document.getElementById('res-sev-box');
+  box.textContent = 'Severity: ' + sev;
+  box.className = 'result-sev ' + sev;
+
+  document.getElementById('res-risk').textContent = pct(d.long_score);
+  document.getElementById('res-interp').textContent = (d.interp && d.interp.label) || '';
+  document.getElementById('res-referral').textContent = d.referral || '—';
+  document.getElementById('res-reasoning').textContent = d.reasoning || '—';
+  document.getElementById('res-action').textContent = d.action || '—';
+
+  const setMetric = (id, barId, val) => {
+    document.getElementById(id).textContent = pct(val);
+    document.getElementById(barId).style.width = pct(val);
+  };
+  setMetric('res-sym',   'res-sym-bar',   d.symptom_index||0);
+  setMetric('res-voice', 'res-voice-bar', d.voice_index||0);
+  setMetric('res-drift', 'res-drift-bar', d.drift_score||0);
+
+  // Voice biomarkers
+  const feat = d.voice_features || {};
+  if (Object.keys(feat).length) {
+    const row = document.getElementById('biomarker-row');
+    row.innerHTML = [
+      ['Jitter', (feat.jitter||0).toFixed(4)],
+      ['Shimmer', (feat.shimmer||0).toFixed(4)],
+      ['HNR (dB)', (feat.hnr||0).toFixed(1)],
+      ['Duration', (feat.phonation_duration||0).toFixed(1)+'s'],
+    ].map(([l,v]) => `<div class="col-3"><div class="metric-card text-center"><div class="metric-label">${l}</div><div class="metric-value fs-5">${v}</div></div></div>`).join('');
+    document.getElementById('voice-biomarkers').style.display = '';
+  }
+  if (d.is_baseline) {
+    const n = document.getElementById('baseline-notice');
+    n.textContent = 'First session — voice baseline saved. Future sessions will track changes from today.';
+    n.style.display = '';
+  }
+
+  // Alerts
+  const al = document.getElementById('result-alerts');
+  al.innerHTML = (d.alerts||[]).map(a =>
+    `<div class="alert alert-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>${a.message}</div>`
+  ).join('');
+}
+
+// ── History chart ──
+{% if history %}
+(function(){
+  const raw = {{ history|tojson }};
+  const sessions = raw.slice().reverse();
+  const labels = sessions.map((_,i) => 'S'+(i+1));
+  const get = (key) => sessions.map(s => s[key]||0);
+  new Chart(document.getElementById('historyChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label:'Longitudinal Score',
+          data:get('longitudinal_score'),
+          borderColor:'#7c3aed', backgroundColor:'rgba(124,58,237,.12)',
+          fill:true, tension:.35, borderWidth:2.5,
+          pointRadius:4, pointHoverRadius:6, pointBackgroundColor:'#7c3aed',
+        },
+        {
+          label:'Symptom Index',
+          data:get('symptom_index'),
+          borderColor:'#ef4444', backgroundColor:'transparent',
+          fill:false, tension:.35, borderWidth:2,
+          borderDash:[6,3], pointRadius:3, pointHoverRadius:5, pointBackgroundColor:'#ef4444',
+        },
+        {
+          label:'Voice Index',
+          data:get('voice_index'),
+          borderColor:'#3b82f6', backgroundColor:'transparent',
+          fill:false, tension:.35, borderWidth:2,
+          borderDash:[6,3], pointRadius:3, pointHoverRadius:5, pointBackgroundColor:'#3b82f6',
+        },
+      ]
+    },
+    options: {
+      responsive:true,
+      maintainAspectRatio:false,
+      interaction:{mode:'index', intersect:false},
+      plugins:{
+        legend:{position:'bottom', labels:{boxWidth:12, font:{size:11}, padding:16}},
+        tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+(ctx.parsed.y*100).toFixed(0)+'%'}}
+      },
+      scales:{
+        y:{min:0, max:1.0, grid:{color:'rgba(0,0,0,.06)'}, ticks:{callback:v=>(v*100).toFixed(0)+'%', font:{size:11}, stepSize:0.2}},
+        x:{grid:{display:false}, ticks:{font:{size:11}}}
+      }
+    }
+  });
+})();
+{% endif %}
+
+// ── Save profile ──
+async function saveProfile() {
+  const data = {
+    age: parseInt(document.getElementById('p-age').value),
+    gender: document.getElementById('p-gender').value,
+    respiratory_condition: document.getElementById('p-resp').checked,
+    smoking: document.getElementById('p-smoke').checked,
+    notes: document.getElementById('p-notes').value,
+  };
+  const res = await fetch('/api/profile/save', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(data)
+  });
+  const d = await res.json();
+  const el = document.getElementById('profile-alert');
+  el.innerHTML = d.ok
+    ? '<div class="alert alert-success py-2">Profile saved.</div>'
+    : '<div class="alert alert-danger py-2">Save failed.</div>';
+}
+</script>
+{% endblock %}

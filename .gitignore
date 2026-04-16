@@ -55,3 +55,20 @@ Thumbs.db
 monthly_report_*.md
 monthly_report_*.tex
 generate_*.py
+
+# LaTeX files
+*.tex
+
+# Paper drafts
+PAPER_DRAFT.md
+
+# Streamlit config
+.streamlit/
+
+# SQLite database (runtime data, not source)
+data/sessions.db
+
+# Temp/backup files
+*.tmp.*
+*_backup.py
+*_backup.html

@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Doctor Portal — RespiTriage AI{% endblock %}
+
+{% block sidebar_name %}Dr. {{ user.full_name or user.username }}{% endblock %}
+{% block sidebar_role %}Doctor Portal{% endblock %}
+
+{% block sidebar_nav %}
+<a class="sidebar-nav-item active" href="/doctor">
+  <i class="bi bi-people"></i> Patient List
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <span class="page-header-icon">🩺</span>
+  <div>
+    <h1>Patient Dashboard</h1>
+    <p>{{ patients|length }} registered patient{% if patients|length != 1 %}s{% endif %} — click to view detail &amp; run Tier 2</p>
+  </div>
+</div>
+
+{% if not patients %}
+<div class="alert alert-info"><i class="bi bi-info-circle me-2"></i>No patients registered yet.</div>
+{% else %}
+
+<!-- Search -->
+<div class="mb-3" style="max-width:360px;">
+  <div class="input-group">
+    <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+    <input type="text" id="search-input" class="form-control border-start-0 ps-0"
+           placeholder="Search by name or username..." oninput="filterPatients()"/>
+  </div>
+</div>
+
+<!-- Stats row -->
+<div class="row g-3 mb-4">
+  <div class="col-auto"><div class="metric-card text-center" style="min-width:100px;"><div class="metric-label">Total</div><div class="metric-value">{{ patients|length }}</div></div></div>
+  <div class="col-auto"><div class="metric-card text-center" style="min-width:100px;"><div class="metric-label">Alerts</div><div class="metric-value text-danger">{{ patients|selectattr('alert')|list|length }}</div></div></div>
+  <div class="col-auto"><div class="metric-card text-center" style="min-width:100px;"><div class="metric-label">High/Critical</div><div class="metric-value text-danger">{{ patients|selectattr('severity','in',['HIGH','CRITICAL'])|list|length }}</div></div></div>
+</div>
+
+<!-- Patient list -->
+<div id="patient-list">
+{% for p in patients %}
+{% set border = {'HIGH':'#ef4444','CRITICAL':'#ef4444','MODERATE':'#f59e0b','LOW':'#22c55e'}.get(p.severity, '#94a3b8') %}
+<div class="patient-row" style="border-left-color:{{ border }};" data-name="{{ p.name|lower }}" data-user="{{ p.username|lower }}">
+  <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+    <!-- Avatar + name -->
+    <div class="d-flex align-items-center gap-3" style="min-width:180px;">
+      <div style="width:42px;height:42px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:1rem;flex-shrink:0;">
+        {{ p.name[0]|upper }}
+      </div>
+      <div>
+        <div class="fw-600" style="font-size:.95rem;">
+          {{ p.name }}
+          {% if p.alert %}<span class="badge bg-danger ms-1" style="font-size:.7rem;">⚠ ALERT</span>{% endif %}
+        </div>
+        <div style="font-size:.75rem;color:#64748b;">@{{ p.username }} · {{ p.age }} yrs · {{ p.gender }}</div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="d-flex flex-wrap gap-3 align-items-center">
+      <div class="text-center">
+        <div style="font-size:.65rem;color:#94a3b8;text-transform:uppercase;font-weight:600;">Severity</div>
+        <span class="sev-badge sev-{{ p.severity }}">{{ p.severity }}</span>
+      </div>
+      <div class="text-center">
+        <div style="font-size:.65rem;color:#94a3b8;text-transform:uppercase;font-weight:600;">Risk</div>
+        <div class="fw-700" style="font-size:.9rem;">{{ p.risk_score }}</div>
+      </div>
+      <div class="text-center">
+        <div style="font-size:.65rem;color:#94a3b8;text-transform:uppercase;font-weight:600;">COPD</div>
+        <div class="fw-600" style="font-size:.9rem;color:#64748b;">{{ p.copd }}</div>
+      </div>
+      <div class="text-center">
+        <div style="font-size:.65rem;color:#94a3b8;text-transform:uppercase;font-weight:600;">Pneu</div>
+        <div class="fw-600" style="font-size:.9rem;color:#64748b;">{{ p.pneu }}</div>
+      </div>
+      <div class="text-center">
+        <div style="font-size:.65rem;color:#94a3b8;text-transform:uppercase;font-weight:600;">Voice</div>
+        <div class="fw-600" style="font-size:.9rem;color:#64748b;">{{ p.voice }}</div>
+      </div>
+      <div class="text-center">
+        <div style="font-size:.65rem;color:#94a3b8;text-transform:uppercase;font-weight:600;">Sessions</div>
+        <div class="fw-700" style="font-size:.9rem;">{{ p.sessions }}</div>
+      </div>
+      <div class="text-center">
+        <div style="font-size:.65rem;color:#94a3b8;text-transform:uppercase;font-weight:600;">Last Visit</div>
+        <div style="font-size:.8rem;color:#64748b;">{{ p.last_visit }}</div>
+      </div>
+      <a href="/doctor/patient/{{ p.id }}" class="btn btn-primary btn-sm px-3">
+        <i class="bi bi-arrow-right-circle me-1"></i>View
+      </a>
+    </div>
+  </div>
+</div>
+{% endfor %}
+</div>
+
+<div id="no-results" class="alert alert-info" style="display:none;">
+  <i class="bi bi-search me-2"></i>No patients match your search.
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function filterPatients() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  let count = 0;
+  document.querySelectorAll('.patient-row').forEach(row => {
+    const match = row.dataset.name.includes(q) || row.dataset.user.includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) count++;
+  });
+  document.getElementById('no-results').style.display = count === 0 ? '' : 'none';
+}
+</script>
+{% endblock %}

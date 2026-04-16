@@ -24,6 +24,28 @@ OPERA_CT_DIM = 768
 SAMPLE_RATE  = 16000
 
 
+def _to_wav_if_needed(file_path: str) -> tuple[str, bool]:
+    """
+    Convert non-WAV audio to a temporary WAV file for OPERA compatibility.
+    Returns (path_to_use, should_delete).
+    OPERA's get_entire_signal_librosa appends .wav internally, so non-WAV
+    files must be converted first.
+    """
+    if file_path.lower().endswith('.wav'):
+        return file_path, False
+    try:
+        import librosa
+        import soundfile as sf
+        import tempfile
+        y, sr = librosa.load(file_path, sr=SAMPLE_RATE, mono=True)
+        tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+        sf.write(tmp.name, y, SAMPLE_RATE)
+        tmp.close()
+        return tmp.name, True
+    except Exception:
+        return file_path, False
+
+
 def _preprocess_one(file_path: str, input_sec: int = 8) -> np.ndarray | None:
     """
     Load and preprocess one audio file to mel spectrogram.
@@ -33,18 +55,17 @@ def _preprocess_one(file_path: str, input_sec: int = 8) -> np.ndarray | None:
     # Resolve to absolute path BEFORE chdir — chdir changes relative path resolution
     file_path = os.path.abspath(file_path)
 
+    # Convert to WAV — OPERA's get_entire_signal_librosa appends .wav internally
+    # so webm/mp3/ogg/mp4 files would silently fail without this conversion
+    wav_path, should_delete = _to_wav_if_needed(file_path)
+
     orig_dir = os.getcwd()
     os.chdir(OPERA_REPO)
     try:
-        from src.util import get_entire_signal_librosa, pre_process_audio_mel_t
+        from src.util import get_entire_signal_librosa
 
-        # Strip extension — OPERA appends .wav internally
-        base = file_path
-        for ext in ('.wav', '.webm', '.mp3', '.flac', '.mp4', '.ogg', '.m4a'):
-            if base.endswith(ext):
-                base = base[:-len(ext)]
-                break
-
+        # Strip .wav extension — OPERA appends .wav internally
+        base     = wav_path[:-4] if wav_path.endswith('.wav') else wav_path
         folder   = os.path.dirname(base)
         filename = os.path.basename(base)
 
@@ -59,6 +80,11 @@ def _preprocess_one(file_path: str, input_sec: int = 8) -> np.ndarray | None:
         return None
     finally:
         os.chdir(orig_dir)
+        if should_delete:
+            try:
+                os.unlink(wav_path)
+            except Exception:
+                pass
 
 
 class OPERAEncoder:

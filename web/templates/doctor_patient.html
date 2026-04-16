@@ -1,0 +1,540 @@
+{% extends "base.html" %}
+{% block title %}{{ sel_name }} — Doctor Portal{% endblock %}
+
+{% block sidebar_name %}Dr. {{ user.full_name or user.username }}{% endblock %}
+{% block sidebar_role %}Doctor Portal{% endblock %}
+
+{% block sidebar_nav %}
+<a class="sidebar-nav-item" href="/doctor">
+  <i class="bi bi-arrow-left"></i> Back to List
+</a>
+<div class="sidebar-nav-item active" style="cursor:default;">
+  <i class="bi bi-person-circle"></i> Patient Detail
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <span class="page-header-icon">👤</span>
+  <div>
+    <h1>{{ sel_name }}</h1>
+    <p>ID: {{ sel_pid }} · @{{ sel_user.get('username','—') }}</p>
+  </div>
+</div>
+
+{% for a in alerts %}
+<div class="alert alert-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>{{ a.message }}</div>
+{% endfor %}
+
+<!-- ── Summary metrics ── -->
+<div class="row g-3 mb-4">
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Age</div><div class="metric-value">{{ sel_profile.get('age') or '—' }}</div></div></div>
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Gender</div><div class="metric-value fs-5">{{ (sel_profile.get('gender') or '—').capitalize() }}</div></div></div>
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Resp. Cond.</div><div class="metric-value fs-5">{{ 'Yes' if sel_profile.get('respiratory_condition') else 'No' }}</div></div></div>
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Smoker</div><div class="metric-value fs-5">{{ 'Yes' if sel_profile.get('smoking') else 'No' }}</div></div></div>
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Sessions</div><div class="metric-value">{{ history|length }}</div></div></div>
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Severity</div><div class="metric-value fs-5"><span class="sev-badge sev-{{ latest.get('severity','—') }}">{{ latest.get('severity','—') }}</span></div></div></div>
+</div>
+
+{% if history %}
+<div class="row g-3 mb-4">
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Longitudinal Score</div><div class="metric-value">{{ "%.0f%%"|format(long_score*100) }}</div><div class="metric-sub">50% symptom + 35% voice + 15% cough</div></div></div>
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Symptom Index</div><div class="metric-value">{{ "%.0f%%"|format(latest.get('symptom_index',0)*100) }}</div></div></div>
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Voice Index</div><div class="metric-value">{{ "%.0f%%"|format(latest.get('voice_index',0)*100) }}</div></div></div>
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">COPD Risk</div><div class="metric-value">{{ "%.0f%%"|format(latest.get('copd_confidence',0)*100) }}</div></div></div>
+  <div class="col"><div class="metric-card text-center"><div class="metric-label">Pneumonia Risk</div><div class="metric-value">{{ "%.0f%%"|format(latest.get('pneu_confidence',0)*100) }}</div></div></div>
+</div>
+{% endif %}
+
+{% if sel_profile.get('notes') %}
+<div class="alert alert-info py-2"><i class="bi bi-chat-left-text me-2"></i><strong>Clinical Notes:</strong> {{ sel_profile.notes }}</div>
+{% endif %}
+
+<!-- ── Chart ── -->
+{% if history %}
+<div class="card p-4 mb-4">
+  <!-- Panel 1: composite + symptom + voice -->
+  <div class="fw-600 mb-1" style="font-size:.85rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
+    <i class="bi bi-graph-up-arrow me-2"></i>Longitudinal Risk Trend — {{ sel_name }}
+  </div>
+  <div class="text-muted mb-3" style="font-size:.78rem;">Composite risk score, symptom index &amp; voice index across all sessions</div>
+  <div style="position:relative;height:260px;">
+    <canvas id="trendChart"></canvas>
+  </div>
+
+  <hr class="my-4"/>
+
+  <!-- Panel 2: COPD + Pneumonia confidence -->
+  <div class="fw-600 mb-1" style="font-size:.85rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
+    <i class="bi bi-stethoscope me-2"></i>Audio Agent Confidence
+  </div>
+  <div class="text-muted mb-3" style="font-size:.78rem;">COPD &amp; Pneumonia model confidence — dashed lines mark clinical thresholds (COPD 50%, Pneu 64%)</div>
+  <div style="position:relative;height:220px;">
+    <canvas id="audioChart"></canvas>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Session log ── -->
+{% if history %}
+<div class="card p-0 mb-4">
+  <div class="card-header-styled"><i class="bi bi-table me-2"></i>Full Session History</div>
+  <div class="table-responsive">
+    <table class="table table-striped mb-0">
+      <thead>
+        <tr>
+          <th>Timestamp</th><th>Tier</th><th>Severity</th><th>Diagnosis</th>
+          <th>Risk</th><th>Symptom</th><th>Voice</th><th>Drift</th><th>COPD</th><th>Pneu</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in history %}
+        <tr>
+          <td>{{ s.timestamp[:16] }}</td>
+          <td><span class="badge bg-secondary">T{{ s.tier }}</span></td>
+          <td><span class="sev-badge sev-{{ s.severity }}">{{ s.severity }}</span></td>
+          <td>{{ s.diagnosis or '—' }}</td>
+          <td>{{ "%.0f%%"|format(s.get('longitudinal_score',0)*100) }}</td>
+          <td>{{ "%.0f%%"|format(s.get('symptom_index',0)*100) }}</td>
+          <td>{{ "%.0f%%"|format(s.get('voice_index',0)*100) }}</td>
+          <td>{{ "%.0f%%"|format(s.get('drift_score',0)*100) }}</td>
+          <td>{{ "%.0f%%"|format(s.copd_confidence*100) }}</td>
+          <td>{{ "%.0f%%"|format(s.pneu_confidence*100) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Tier 2 Assessment ── -->
+<div class="card p-0 mb-4">
+  <div class="card-header-styled"><i class="bi bi-stethoscope me-2"></i>Tier 2 Clinical Assessment</div>
+  <div class="p-4">
+    <div class="alert alert-info py-2" style="font-size:.85rem;">
+      Upload a stethoscope lung sound recording. The full AI pipeline (COPD + Pneumonia + Sound agents) will run.
+    </div>
+    <form id="tier2-form" enctype="multipart/form-data">
+      <input type="hidden" name="patient_db_id" value="{{ patient_db_id }}"/>
+      <div class="row g-4">
+        <div class="col-md-5">
+          <label class="form-label fw-600">Stethoscope Lung Sound Recording</label>
+          <input type="file" name="lung_file" id="lung-file" class="form-control mb-2"
+                 accept=".wav,.mp3,.webm,.ogg,.m4a,.flac,.mp4"/>
+          <audio id="lung-audio" controls class="w-100 mb-2" style="display:none;height:36px;"></audio>
+        </div>
+        <div class="col-md-7">
+          <div class="fw-600 mb-2" style="font-size:.88rem;">Reported Symptoms</div>
+          <div class="row g-2 mb-2">
+            <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" id="t2-fever" name="fever" value="true"/><label class="form-check-label" for="t2-fever">Fever / Muscle Pain</label></div></div>
+            <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" id="t2-dyspnea" name="dyspnea" value="true"/><label class="form-check-label" for="t2-dyspnea">Difficulty Breathing</label></div></div>
+            <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" id="t2-wheeze" name="wheezing" value="true"/><label class="form-check-label" for="t2-wheeze">Wheezing</label></div></div>
+            <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" id="t2-resp" name="resp_cond" value="true" {% if sel_profile.get('respiratory_condition') %}checked{% endif %}/><label class="form-check-label" for="t2-resp">Respiratory Condition</label></div></div>
+            <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" id="t2-cong" name="congestion" value="true"/><label class="form-check-label" for="t2-cong">Nasal Congestion</label></div></div>
+          </div>
+          <label class="form-label">Cough Severity <span id="t2-cough-val" class="text-primary fw-600">0.3</span></label>
+          <input type="range" name="cough_sev" class="form-range mb-2" min="0" max="1" step="0.1" value="0.3"
+                 oninput="document.getElementById('t2-cough-val').textContent=parseFloat(this.value).toFixed(1)"/>
+          <label class="form-label">Breathlessness (mMRC)</label>
+          <select name="dyspnea_level" class="form-select">
+            <option value="0">0 — None</option><option value="1">1 — Mild</option>
+            <option value="2">2 — Moderate</option><option value="3">3 — Severe</option>
+            <option value="4">4 — Very Severe</option>
+          </select>
+
+          <!-- ── Additional Free-Text Symptoms ── -->
+          <div class="mt-3" style="border-top:1px solid #e2e8f0;padding-top:.9rem;">
+            <div class="fw-600 mb-1" style="font-size:.82rem;color:#475569;text-transform:uppercase;letter-spacing:.04em;">
+              <i class="bi bi-pencil-square me-1"></i>Additional Symptoms
+              <span style="font-size:.7rem;font-weight:400;color:#94a3b8;margin-left:.4rem;">AI-validated · optional</span>
+            </div>
+            <textarea id="t2-extra-input" class="form-control mb-2" rows="2"
+              placeholder="e.g. sore throat, night sweats, haemoptysis  (comma-separated)"
+              style="font-size:.85rem;resize:vertical;"></textarea>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="t2-validate-btn" onclick="t2ValidateSymptoms()">
+                <i class="bi bi-shield-check me-1"></i>Validate with AI
+              </button>
+              <button type="button" class="btn btn-outline-danger btn-sm" id="t2-clear-btn" onclick="t2ClearAll()" style="display:none;">
+                <i class="bi bi-x-circle me-1"></i>Clear All
+              </button>
+              <span id="t2-validate-spinner" style="display:none;font-size:.8rem;color:#64748b;">
+                <span class="spinner-border spinner-border-sm me-1"></span>Checking...
+              </span>
+            </div>
+
+            <!-- Validation results -->
+            <div id="t2-validation-results" style="display:none;margin-top:.75rem;">
+              <div id="t2-valid-box" style="display:none;margin-bottom:.4rem;">
+                <div style="font-size:.72rem;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem;">
+                  <i class="bi bi-check-circle-fill me-1"></i>Accepted
+                </div>
+                <div id="t2-valid-tags" class="d-flex flex-wrap gap-2"></div>
+              </div>
+              <div id="t2-invalid-box" style="display:none;margin-bottom:.4rem;">
+                <div style="font-size:.72rem;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem;">
+                  <i class="bi bi-exclamation-triangle-fill me-1"></i>Not recognised
+                </div>
+                <div id="t2-invalid-tags" class="d-flex flex-wrap gap-2"></div>
+              </div>
+              <div id="t2-valid-summary" style="font-size:.78rem;color:#64748b;"></div>
+            </div>
+            <input type="hidden" name="extra_symptom_boost" id="t2-extra-boost" value="0"/>
+          </div>
+        </div>
+      </div>
+      <button type="submit" id="t2-btn" class="btn btn-primary mt-3 px-5" disabled>
+        <i class="bi bi-cpu me-2"></i>Run Tier 2 Assessment
+      </button>
+    </form>
+
+    <!-- Tier 2 result -->
+    <div id="t2-result" style="display:none;" class="mt-4">
+      <hr/>
+      <h6 class="fw-700 mb-3">Tier 2 Result</h6>
+      <div class="row g-3 mb-3">
+        <div class="col-md-4"><div class="result-sev" id="t2-sev-box">—</div></div>
+        <div class="col-md-4"><div class="metric-card text-center"><div class="metric-label">Risk Score</div><div class="metric-value" id="t2-risk">—</div><div class="metric-sub" id="t2-interp">—</div></div></div>
+        <div class="col-md-4"><div class="metric-card text-center"><div class="metric-label">Referral</div><div class="metric-value fs-5" id="t2-referral">—</div></div></div>
+      </div>
+      <div class="row g-3 mb-3">
+        <div class="col-md-4">
+          <div class="metric-card"><div class="metric-label">COPD Agent</div>
+            <div class="d-flex justify-content-between align-items-center mt-1">
+              <span class="fw-700" id="t2-copd-prob">—</span>
+              <span id="t2-copd-det" class="badge">—</span>
+            </div>
+            <div class="progress mt-2"><div class="progress-bar bg-danger" id="t2-copd-bar"></div></div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="metric-card"><div class="metric-label">Pneumonia Agent</div>
+            <div class="d-flex justify-content-between align-items-center mt-1">
+              <span class="fw-700" id="t2-pneu-prob">—</span>
+              <span id="t2-pneu-det" class="badge">—</span>
+            </div>
+            <div class="progress mt-2"><div class="progress-bar bg-primary" id="t2-pneu-bar"></div></div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="metric-card"><div class="metric-label">Sound Agent</div>
+            <div class="fw-700 mt-1" id="t2-sound-type">—</div>
+            <div class="metric-sub" id="t2-sound-conf">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="card p-3 mb-2"><div class="fw-600 mb-1 text-muted" style="font-size:.78rem;">CLINICAL REASONING</div><div id="t2-reasoning" style="font-size:.88rem;"></div></div>
+      <div class="card p-3 mb-2"><div class="fw-600 mb-1 text-muted" style="font-size:.78rem;">RECOMMENDED ACTION</div><div id="t2-action" class="text-success fw-500" style="font-size:.88rem;"></div></div>
+      <div id="t2-alerts"></div>
+      <div class="alert alert-success py-2 mt-2"><i class="bi bi-check-circle me-2"></i>Result saved to patient history.</div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ── Lung audio preview ──
+document.getElementById('lung-file').addEventListener('change', function() {
+  const el = document.getElementById('lung-audio');
+  const btn = document.getElementById('t2-btn');
+  if (this.files[0]) { el.src = URL.createObjectURL(this.files[0]); el.style.display=''; btn.disabled=false; }
+  else { el.style.display='none'; btn.disabled=true; }
+});
+
+// ── Charts ──
+{% if history %}
+(function(){
+  const data   = {{ chart_data | tojson }};
+  const labels = data.map(d => 'S' + d.session);
+
+  const baseOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode:'index', intersect:false },
+    plugins: {
+      legend: { position:'bottom', labels:{ boxWidth:12, font:{size:11}, padding:16 } },
+      tooltip: { callbacks:{ label: ctx => ctx.dataset.label + ': ' + (ctx.parsed.y*100).toFixed(0)+'%' } }
+    },
+    scales: {
+      y: {
+        min: 0,
+        max: 1.0,
+        grid:{ color:'rgba(0,0,0,.06)' },
+        ticks:{ callback: v => (v*100).toFixed(0)+'%', font:{size:11}, stepSize: 0.2 }
+      },
+      x: { grid:{ display:false }, ticks:{ font:{size:11} } }
+    }
+  };
+
+  // ── Panel 1: Composite + Symptom + Voice ──
+  new Chart(document.getElementById('trendChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Longitudinal Score',
+          data: data.map(d => d.longitudinal_score),
+          borderColor: '#7c3aed', backgroundColor: 'rgba(124,58,237,.12)',
+          fill: true, tension: .35, borderWidth: 2.5,
+          pointRadius: 4, pointHoverRadius: 6,
+          pointBackgroundColor: '#7c3aed',
+        },
+        {
+          label: 'Symptom Index',
+          data: data.map(d => d.symptom_index),
+          borderColor: '#ef4444', backgroundColor: 'transparent',
+          fill: false, tension: .35, borderWidth: 2,
+          borderDash: [6,3], pointRadius: 3, pointHoverRadius: 5,
+          pointBackgroundColor: '#ef4444',
+        },
+        {
+          label: 'Voice Index',
+          data: data.map(d => d.voice_index),
+          borderColor: '#3b82f6', backgroundColor: 'transparent',
+          fill: false, tension: .35, borderWidth: 2,
+          borderDash: [6,3], pointRadius: 3, pointHoverRadius: 5,
+          pointBackgroundColor: '#3b82f6',
+        },
+      ]
+    },
+    options: {
+      ...baseOpts,
+      plugins: {
+        ...baseOpts.plugins,
+        annotation: undefined,
+      }
+    }
+  });
+
+  // ── Panel 2: COPD + Pneumonia confidence ──
+  // Add threshold reference lines as datasets
+  const n = data.length;
+  new Chart(document.getElementById('audioChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'COPD Confidence',
+          data: data.map(d => d.copd_confidence),
+          borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,.1)',
+          fill: true, tension: .35, borderWidth: 2.5,
+          pointRadius: 4, pointHoverRadius: 6,
+          pointBackgroundColor: '#f97316',
+        },
+        {
+          label: 'Pneumonia Confidence',
+          data: data.map(d => d.pneu_confidence),
+          borderColor: '#06b6d4', backgroundColor: 'rgba(6,182,212,.08)',
+          fill: true, tension: .35, borderWidth: 2.5,
+          pointRadius: 4, pointHoverRadius: 6,
+          pointBackgroundColor: '#06b6d4',
+        },
+        {
+          label: 'COPD threshold (50%)',
+          data: Array(n).fill(0.50),
+          borderColor: 'rgba(249,115,22,.45)', backgroundColor: 'transparent',
+          fill: false, borderDash: [4,4], borderWidth: 1.5,
+          pointRadius: 0, pointHoverRadius: 0,
+        },
+        {
+          label: 'Pneu threshold (64%)',
+          data: Array(n).fill(0.64),
+          borderColor: 'rgba(6,182,212,.45)', backgroundColor: 'transparent',
+          fill: false, borderDash: [4,4], borderWidth: 1.5,
+          pointRadius: 0, pointHoverRadius: 0,
+        },
+      ]
+    },
+    options: baseOpts
+  });
+})();
+{% endif %}
+
+// ── Doctor portal: validated symptom store ──
+let _t2Symptoms = [];
+
+function _t2RecalcBoost() {
+  const total = Math.min(_t2Symptoms.reduce((s, x) => s + x.boost, 0), 0.25);
+  document.getElementById('t2-extra-boost').value = total.toFixed(4);
+}
+
+function t2RemoveSymptom(label) {
+  _t2Symptoms = _t2Symptoms.filter(x => x.label !== label);
+  _t2RecalcBoost();
+  _t2RenderValid();
+  if (_t2Symptoms.length === 0) {
+    document.getElementById('t2-valid-box').style.display = 'none';
+    _t2CheckEmpty();
+  }
+}
+
+function _t2RenderValid() {
+  document.getElementById('t2-valid-tags').innerHTML = _t2Symptoms.map(x => `
+    <span style="display:inline-flex;align-items:center;gap:.3rem;
+      background:#dcfce7;border:1px solid #86efac;border-radius:999px;
+      padding:.22rem .65rem;font-size:.78rem;font-weight:600;color:#16a34a;">
+      <i class="bi bi-check-circle-fill" style="font-size:.68rem;"></i>
+      ${x.label}
+      <button type="button" onclick="t2RemoveSymptom('${x.label.replace(/'/g,"\\'")}')"
+        style="background:none;border:none;padding:0;margin-left:.1rem;
+               cursor:pointer;color:#16a34a;font-size:.82rem;line-height:1;">
+        <i class="bi bi-x-circle-fill"></i>
+      </button>
+    </span>`).join('');
+}
+
+function _t2CheckEmpty() {
+  const vb = document.getElementById('t2-valid-box');
+  const ib = document.getElementById('t2-invalid-box');
+  if (vb.style.display === 'none' && ib.style.display === 'none') {
+    document.getElementById('t2-validation-results').style.display = 'none';
+    document.getElementById('t2-clear-btn').style.display = 'none';
+  }
+}
+
+function t2ClearAll() {
+  _t2Symptoms = [];
+  document.getElementById('t2-extra-boost').value = '0';
+  document.getElementById('t2-extra-input').value = '';
+  document.getElementById('t2-validation-results').style.display = 'none';
+  document.getElementById('t2-valid-box').style.display = 'none';
+  document.getElementById('t2-invalid-box').style.display = 'none';
+  document.getElementById('t2-valid-summary').textContent = '';
+  document.getElementById('t2-clear-btn').style.display = 'none';
+  document.getElementById('t2-valid-tags').innerHTML = '';
+  document.getElementById('t2-invalid-tags').innerHTML = '';
+}
+
+async function t2ValidateSymptoms() {
+  const text = document.getElementById('t2-extra-input').value.trim();
+  if (!text) return;
+  document.getElementById('t2-validate-btn').disabled = true;
+  document.getElementById('t2-validate-spinner').style.display = '';
+  document.getElementById('t2-validation-results').style.display = 'none';
+
+  try {
+    const res  = await fetch('/api/validate-symptoms', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({symptoms_text: text})
+    });
+    const data = await res.json();
+
+    document.getElementById('t2-validate-spinner').style.display = 'none';
+    document.getElementById('t2-validate-btn').disabled = false;
+    document.getElementById('t2-validation-results').style.display = '';
+    document.getElementById('t2-clear-btn').style.display = '';
+
+    const validBox   = document.getElementById('t2-valid-box');
+    const invalidBox = document.getElementById('t2-invalid-box');
+
+    if (data.valid && data.valid.length > 0) {
+      const perBoost = (data.boost || 0) / data.valid.length;
+      data.valid.forEach(label => {
+        if (!_t2Symptoms.find(x => x.label === label))
+          _t2Symptoms.push({ label, boost: perBoost });
+      });
+      _t2RecalcBoost();
+      _t2RenderValid();
+      validBox.style.display = '';
+    } else {
+      validBox.style.display = _t2Symptoms.length > 0 ? '' : 'none';
+    }
+
+    if (data.invalid && data.invalid.length > 0) {
+      invalidBox.style.display = '';
+      document.getElementById('t2-invalid-tags').innerHTML = data.invalid.map(i => `
+        <span style="display:inline-flex;align-items:center;gap:.3rem;
+          background:#fef3c7;border:1px solid #fcd34d;border-radius:999px;
+          padding:.22rem .65rem;font-size:.78rem;font-weight:600;color:#92400e;"
+          title="${i.reason}">
+          <i class="bi bi-x-circle-fill" style="font-size:.68rem;"></i>${i.symptom}
+        </span>`).join('');
+    } else {
+      invalidBox.style.display = 'none';
+    }
+
+    document.getElementById('t2-valid-summary').textContent = data.summary || '';
+    document.getElementById('t2-extra-input').value = '';
+
+  } catch(err) {
+    document.getElementById('t2-validate-spinner').style.display = 'none';
+    document.getElementById('t2-validate-btn').disabled = false;
+    console.error('Validation error:', err);
+  }
+}
+
+// ── Tier 2 submit ──
+document.getElementById('tier2-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  showSpinner('Running Tier 2 assessment...');
+  const fd = new FormData(this);
+  const symptoms = [];
+  if (document.getElementById('t2-fever').checked)   symptoms.push('fever/muscle pain');
+  if (document.getElementById('t2-dyspnea').checked) symptoms.push('difficulty breathing');
+  if (document.getElementById('t2-wheeze').checked)  symptoms.push('wheezing');
+  if (document.getElementById('t2-resp').checked)    symptoms.push('respiratory condition');
+  if (document.getElementById('t2-cong').checked)    symptoms.push('nasal congestion');
+  // Add LLM-validated extra symptoms
+  _t2Symptoms.forEach(x => symptoms.push(x.label));
+  fd.set('symptoms', JSON.stringify(symptoms));
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 300000); // 5 min timeout
+    const res = await fetch('/api/tier2', {method:'POST', body:fd, signal:controller.signal});
+    clearTimeout(timer);
+    const d = await res.json();
+    hideSpinner();
+    if (!d.ok) { alert(d.error||'Assessment failed'); return; }
+    renderT2(d);
+  } catch(err) {
+    hideSpinner();
+    if (err.name === 'AbortError') alert('Request timed out. The pipeline took too long.');
+    else alert('Error: '+err.message);
+  }
+});
+
+function renderT2(d) {
+  const sec = document.getElementById('t2-result');
+  sec.style.display = '';
+  sec.scrollIntoView({behavior:'smooth', block:'start'});
+
+  const box = document.getElementById('t2-sev-box');
+  box.textContent = 'Severity: ' + d.severity;
+  box.className = 'result-sev ' + d.severity;
+
+  document.getElementById('t2-risk').textContent = pct(d.long_score);
+  document.getElementById('t2-interp').textContent = (d.interp && d.interp.label) || '';
+  document.getElementById('t2-referral').textContent = d.referral || '—';
+  document.getElementById('t2-reasoning').textContent = d.reasoning || '—';
+  document.getElementById('t2-action').textContent = d.action || '—';
+
+  const c = d.copd || {};
+  document.getElementById('t2-copd-prob').textContent = pct(c.probability||0);
+  document.getElementById('t2-copd-bar').style.width = pct(c.probability||0);
+  const cdet = document.getElementById('t2-copd-det');
+  cdet.textContent = c.detected ? 'Detected' : 'Not Detected';
+  cdet.className = 'badge ' + (c.detected ? 'bg-danger' : 'bg-success');
+
+  const p = d.pneu || {};
+  document.getElementById('t2-pneu-prob').textContent = pct(p.probability||0);
+  document.getElementById('t2-pneu-bar').style.width = pct(p.probability||0);
+  const pdet = document.getElementById('t2-pneu-det');
+  pdet.textContent = p.detected ? 'Detected' : 'Not Detected';
+  pdet.className = 'badge ' + (p.detected ? 'bg-danger' : 'bg-success');
+
+  const s = d.sound || {};
+  document.getElementById('t2-sound-type').textContent = s.sound_type || '—';
+  document.getElementById('t2-sound-conf').textContent = s.confidence ? pct(s.confidence) + ' confidence' : '';
+
+  document.getElementById('t2-alerts').innerHTML = (d.alerts||[]).map(a =>
+    `<div class="alert alert-danger py-2"><i class="bi bi-exclamation-triangle-fill me-2"></i>${a.message}</div>`
+  ).join('');
+}
+</script>
+{% endblock %}
