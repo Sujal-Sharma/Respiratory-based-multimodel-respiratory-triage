@@ -1,12 +1,16 @@
 # Multimodal Respiratory Triage Using Agentic AI
 
-A research project for a biomedical clinical AI journal paper.
+An agentic AI system for respiratory disease triage using the **OPERA-CT** respiratory foundation model (NeurIPS 2024). The system processes cough/breathing audio and patient symptoms through specialist AI agents, producing structured clinical triage decisions via deterministic rule-based reasoning.
 
-## Overview
+**Targeted diseases:** COPD · Pneumonia · Abnormal Lung Sounds
 
-An agentic AI system for respiratory disease triage using the **OPERA-CT** respiratory foundation model (NeurIPS 2024). The system takes cough/breathing audio and patient symptoms as input, runs them through focused specialist agents, and produces a structured clinical triage decision using deterministic rule-based reasoning.
+---
 
-**Targeted diseases:** COPD and Pneumonia
+## Live Demo
+
+> Run locally: `python server.py` → open `http://127.0.0.1:5000`
+
+**Demo credentials:** `doctor` / `doctor123`
 
 ---
 
@@ -15,21 +19,25 @@ An agentic AI system for respiratory disease triage using the **OPERA-CT** respi
 ```
 Audio Input
     └── OPERA-CT Encoder (768-dim embeddings, HT-SAT backbone)
-            ├── COPD Agent       (BinaryMLP, 768→256→64→2)
-            ├── Pneumonia Agent  (BinaryMLP, 768→256→64→2)
-            └── Sound Agent      (MLP, 768→512→256→64→3) [Tier 2 only]
+            ├── COPD Agent        (BinaryMLP, 768→256→64→2)
+            ├── Pneumonia Agent   (BinaryMLP, 768→256→64→2)
+            └── Sound Agent       (MLP, 768→512→256→64→3)  [Tier 2 only]
 
-Symptom Agent  (clinical heuristics, no ML)
+Voice Agent     (MFCC + jitter + shimmer + HNR from vowel phonation)
+Symptom Agent   (CAT-style clinical scoring, no ML)
+LLM Validator   (Groq llama-3.3-70b — free-text symptom validation)
 
 LangGraph StateGraph
-    analyze_symptoms → run_copd_agent → run_pneumonia_agent
+    analyze_symptoms → run_voice_agent → run_cough_drift
+        → run_copd_agent → run_pneumonia_agent
         → [analyze_lung — Tier 2 only]
-        → apply_rules → record_session → END
+        → compute_longitudinal → apply_rules → record_session → END
 
 Rule Engine (deterministic BTS/GOLD/GINA clinical guidelines)
-    → Triage Decision: diagnosis, severity, confidence, referral urgency
+    → Triage Decision: diagnosis · severity · confidence · referral urgency
 
-Session Agent (SQLite + linear regression deterioration detection)
+Session Store (SQLite + linear regression deterioration detection)
+3-Signal Fusion: 50% symptom + 35% voice + 15% cough drift
 ```
 
 ---
@@ -37,14 +45,17 @@ Session Agent (SQLite + linear regression deterioration detection)
 ## Two-Tier Design
 
 **Tier 1 — Patient Self-Screening**
-- Patient uploads a cough or breathing recording + fills symptom form
-- COPD Agent + Pneumonia Agent + Symptom Agent run
+- Patient uploads vowel recording ("Ahhh") + optional cough recording
+- Fills symptom form + optional free-text symptoms (LLM-validated)
+- COPD Agent + Pneumonia Agent + Voice Agent + Symptom Agent run
+- Longitudinal risk score tracks health trajectory over time
 - Rule engine produces: severity, diagnosis, recommended action
 
-**Tier 2 — Clinician Confirmation**
-- Clinician adds a stethoscope lung sound recording
+**Tier 2 — Clinician Assessment**
+- Doctor uploads stethoscope lung sound recording for a specific patient
 - Sound Agent also runs (Normal / Crackle / Wheeze)
-- All signals combined for final triage decision
+- Doctor can add free-text symptoms — LLM validates before scoring
+- All signals fused for final triage decision
 
 ---
 
@@ -57,9 +68,9 @@ Session Agent (SQLite + linear regression deterioration detection)
 | Sound Classifier (OPERA-MLP, 3-class) | Normal / Crackle / Wheeze | 60.5% | 0.594 | — | — |
 
 **Notes:**
-- Pneumonia evaluated via 5-fold stratified cross-validation (only 52 positive samples available)
-- Sound classifier "Both" class removed — merged into Crackle due to insufficient samples (190 total)
-- All models use pre-computed OPERA-CT embeddings — OPERA runs once, training reads `.npy` files only
+- Pneumonia evaluated via 5-fold stratified cross-validation (only 52 positive samples)
+- Sound classifier "Both" class merged into Crackle due to insufficient samples
+- All models use pre-computed OPERA-CT embeddings — OPERA runs once at extraction time
 
 ---
 
@@ -67,10 +78,10 @@ Session Agent (SQLite + linear regression deterioration detection)
 
 | Dataset | Task | Samples |
 |---|---|---|
-| ICBHI Respiratory Sound Database | COPD binary + lung sound labels | 6898 recordings |
-| KAUH Clinical Lung Recordings | COPD + Pneumonia binary + sound labels | 147 recordings |
+| ICBHI Respiratory Sound Database | COPD binary + lung sound labels | 6,898 recordings |
+| KAUH Clinical Lung Recordings | COPD + Pneumonia + sound labels | 147 recordings |
 | COUGHVID | COPD binary (cough audio) | ~7,500 recordings |
-| HF Lung V1 | Lung sound classification | 7503 recordings |
+| HF Lung V1 | Lung sound classification | 7,503 recordings |
 
 Total OPERA embeddings extracted: **11,579 `.npy` files** (768-dim each)
 
@@ -79,43 +90,48 @@ Total OPERA embeddings extracted: **11,579 `.npy` files** (768-dim each)
 ## Project Structure
 
 ```
-├── app.py                          # Streamlit two-tier triage web app
-├── requirements.txt                # Python dependencies
+├── server.py                           # Flask web server (main entry point)
+├── requirements.txt
 ├── agents/
-│   ├── copd_agent.py               # COPD binary specialist (OPERA + MLP)
-│   ├── pneumonia_agent.py          # Pneumonia binary specialist (OPERA + MLP)
-│   ├── sound_agent.py              # Lung sound classifier — Tier 2 (3-class)
-│   ├── symptom_agent.py            # Clinical heuristic symptom scorer
-│   └── session_agent.py            # Session recording + deterioration alerts
+│   ├── copd_agent.py                   # COPD binary specialist (OPERA + MLP)
+│   ├── pneumonia_agent.py              # Pneumonia binary specialist (OPERA + MLP)
+│   ├── sound_agent.py                  # Lung sound classifier — Tier 2 (3-class)
+│   ├── voice_agent.py                  # Voice biomarker extractor (MFCC, jitter, shimmer)
+│   ├── symptom_agent.py                # CAT-style clinical symptom scorer
+│   └── session_agent.py                # Session recording + deterioration alerts
 ├── models/
-│   ├── opera_encoder.py            # Batched GPU OPERA-CT encoder (ThreadPoolExecutor)
-│   ├── mlp_classifier.py           # BinaryMLPClassifier, SoundMLPClassifier, FocalLoss
-│   └── embedding_dataset.py        # PyTorch Dataset for pre-computed .npy embeddings
+│   ├── opera_encoder.py                # Batched GPU OPERA-CT encoder
+│   ├── mlp_classifier.py               # BinaryMLP + SoundMLP + FocalLoss
+│   └── embedding_dataset.py            # PyTorch Dataset for pre-computed embeddings
 ├── pipeline/
-│   ├── triage_graph.py             # LangGraph StateGraph orchestration
-│   └── rule_engine.py              # Deterministic BTS/GOLD/GINA rule engine
+│   ├── triage_graph.py                 # LangGraph StateGraph orchestration
+│   ├── rule_engine.py                  # Deterministic BTS/GOLD/GINA rule engine
+│   └── longitudinal.py                 # 3-signal fusion + drift detection
 ├── database/
-│   └── session_store.py            # SQLite session store + linear regression deterioration
-├── scripts/
-│   ├── build_label_csvs.py         # Build label CSVs from all 4 datasets
-│   ├── fix_kauh_parser.py          # Parse KAUH dataset filenames
-│   ├── convert_coughvid_webm.py    # Convert COUGHVID .webm → .wav (ffmpeg)
-│   ├── extract_opera_embeddings.py # One-time OPERA-CT embedding extraction
-│   ├── train_binary_agent.py       # Train COPD or Pneumonia MLP classifier
-│   ├── train_pneumonia_cv.py       # Train Pneumonia with 5-fold CV
-│   ├── train_sound_3class.py       # Train 3-class sound classifier
-│   └── evaluate_models.py          # Generate confusion matrices, ROC curves, bar charts
-├── data/
-│   ├── copd_binary_labels.csv      # COPD dataset labels (source label CSVs)
-│   ├── pneumonia_binary_labels.csv
-│   ├── sound_labels.csv
-│   └── kauh_parsed.csv
-├── saved_models/                   # Trained weights (not in repo — too large)
-│   ├── copd_opera_mlp.pt
-│   ├── pneumonia_opera_mlp.pt
-│   └── sound_opera_mlp_3class.pt
-├── outputs/                        # Evaluation figures (not in repo — generated)
-└── DATASET/                        # Raw audio files (not in repo — too large)
+│   ├── auth_store.py                   # User auth + patient profiles (SQLite)
+│   └── session_store.py                # Session store + deterioration detection
+├── utils/
+│   └── symptom_validator.py            # Groq LLM free-text symptom validator
+├── web/
+│   ├── templates/
+│   │   ├── login.html                  # Animated landing page + auth
+│   │   ├── base.html                   # Shared sidebar layout (mobile responsive)
+│   │   ├── patient.html                # Patient self-screening portal
+│   │   ├── doctor.html                 # Doctor patient list portal
+│   │   └── doctor_patient.html         # Doctor patient detail + Tier 2 assessment
+│   └── static/
+│       ├── css/
+│       └── js/
+├── scripts/                            # Training + evaluation scripts
+│   ├── build_label_csvs.py
+│   ├── extract_opera_embeddings.py
+│   ├── train_binary_agent.py
+│   ├── train_pneumonia_cv.py
+│   ├── train_sound_3class.py
+│   └── evaluate_models.py
+├── data/                               # Label CSVs (embeddings excluded from repo)
+├── saved_models/                       # Trained weights (excluded from repo)
+└── outputs/                            # Evaluation figures (excluded from repo)
 ```
 
 ---
@@ -123,51 +139,60 @@ Total OPERA embeddings extracted: **11,579 `.npy` files** (768-dim each)
 ## Setup
 
 ```bash
-# 1. Create and activate virtual environment
+# 1. Clone the repo
+git clone https://github.com/Sujal-Sharma/Respiratory-based-multimodel-respiratory-triage.git
+cd Respiratory-based-multimodel-respiratory-triage
+
+# 2. Create virtual environment
 python -m venv triage_env
 triage_env\Scripts\activate      # Windows
 source triage_env/bin/activate   # Linux/Mac
 
-# 2. Install PyTorch with CUDA
+# 3. Install PyTorch with CUDA
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# 3. Install dependencies
+# 4. Install dependencies
 pip install -r requirements.txt
 
-# 4. Clone OPERA (required for embedding extraction)
+# 5. Clone OPERA (required for embedding extraction only)
 git clone https://github.com/evelyn0414/OPERA.git
 pip install pytorch-lightning torchmetrics efficientnet-pytorch timm torchlibrosa huggingface-hub
 
-# 5. Verify CUDA
-python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+# 6. Set environment variables
+# Create a .env file:
+GROQ_API_KEY=your_groq_api_key_here
+
+# 7. Run the web app
+python server.py
+# Open http://127.0.0.1:5000
 ```
 
 ---
 
-## Running the Pipeline
+## Training Pipeline (if reproducing from scratch)
 
 ```bash
-# Step 1 — Build label CSVs from raw datasets
+# Step 1 — Parse datasets + build label CSVs
 python scripts/fix_kauh_parser.py
-python scripts/convert_coughvid_webm.py   # only if using COUGHVID .webm files
+python scripts/convert_coughvid_webm.py   # if using COUGHVID .webm files
 python scripts/build_label_csvs.py
 
 # Step 2 — Extract OPERA-CT embeddings (one-time, ~2-3 hours)
 python scripts/extract_opera_embeddings.py
 
 # Step 3 — Train models
-python scripts/train_binary_agent.py       # set DISEASE='COPD', then 'Pneumonia'
-python scripts/train_pneumonia_cv.py       # 5-fold CV for Pneumonia (recommended)
+python scripts/train_binary_agent.py       # DISEASE='COPD' then 'Pneumonia'
+python scripts/train_pneumonia_cv.py       # 5-fold CV for Pneumonia
 python scripts/train_sound_3class.py       # 3-class sound classifier
 
-# Step 4 — Evaluate (generates figures in outputs/)
+# Step 4 — Evaluate
 python scripts/evaluate_models.py
-
-# Step 5 — Run the Streamlit web app
-streamlit run app.py
 ```
 
-**Pipeline from Python:**
+---
+
+## Using the Pipeline Directly
+
 ```python
 from pipeline.triage_graph import run_triage
 
@@ -175,14 +200,25 @@ result = run_triage(
     patient_info={
         "age": 58, "gender": "male",
         "symptoms": ["difficulty breathing", "wheezing"],
-        "fever_muscle_pain": False, "respiratory_condition": True,
-        "cough_detected": 0.8, "dyspnea": True,
-        "wheezing": True, "congestion": False,
+        "fever_muscle_pain": False,
+        "respiratory_condition": True,
+        "cough_detected": 0.8,
+        "dyspnea": True,
+        "dyspnea_level": 2,
+        "wheezing": True,
+        "congestion": False,
+        "chest_tightness": 2,
+        "sleep_quality": 1,
+        "energy_level": 2,
+        "sputum": 1,
     },
-    cough_audio_path="path/to/audio.wav",
-    lung_audio_path="path/to/lung.wav",   # empty string for Tier 1
+    cough_audio_path="path/to/cough.wav",
+    vowel_audio_path="path/to/vowel.wav",
+    lung_audio_path="",          # empty for Tier 1, stethoscope path for Tier 2
+    patient_id="patient_1",
 )
 print(result["triage_decision"])
+# {'diagnosis': ..., 'severity': ..., 'referral_urgency': ..., 'reasoning': ...}
 ```
 
 ---
@@ -191,7 +227,7 @@ print(result["triage_decision"])
 
 - NVIDIA GeForce GTX 1650 (4 GB VRAM)
 - CUDA 12.6 / PyTorch cu121
-- OPERA-CT embedding: batch_size=16, float32
+- OPERA-CT inference: batch_size=16, float16
 - Training: AdamW + CosineAnnealingLR + FocalLoss + WeightedRandomSampler
 
 ---
@@ -204,8 +240,10 @@ print(result["triage_decision"])
 | `OPERA/` | 514 MB cloned repo — install separately |
 | `saved_models/` | Trained model weights |
 | `data/opera_embeddings/` | 11,579 `.npy` embedding files |
+| `data/sessions.db` | Runtime database — generated on first run |
 | `outputs/` | Generated evaluation figures |
 | `data/*_with_embeddings.csv` | Generated split CSVs |
+| `.env` | API keys |
 
 ---
 
@@ -216,9 +254,13 @@ print(result["triage_decision"])
 - [x] COPD Agent — AUROC 0.995, F1 0.947, Recall 0.959
 - [x] Pneumonia Agent — AUROC 0.984, F1 0.869 (5-fold CV)
 - [x] Sound Classifier — 3-class, F1 0.594
+- [x] Voice Agent — MFCC + jitter + shimmer + HNR longitudinal tracking
 - [x] Rule Engine — deterministic BTS/GOLD/GINA guidelines
-- [x] LangGraph pipeline — two-tier routing
-- [x] Session monitoring — SQLite + deterioration detection
-- [x] Streamlit web app — two-tier UI
-- [ ] Baseline comparisons (MFCC+MLP, BEATs+linear)
-- [ ] Paper writing + final evaluation
+- [x] LangGraph pipeline — two-tier agentic routing
+- [x] Longitudinal monitoring — 3-signal fusion + drift detection
+- [x] Session store — SQLite + deterioration alerts
+- [x] Flask web app — replaced Streamlit
+- [x] Animated landing page — Bootstrap + Tailwind + AOS
+- [x] Mobile responsive — hamburger sidebar for patient/doctor portals
+- [x] LLM symptom validator — Groq free-text validation in both portals
+- [ ] Deployment — Railway + Turso
