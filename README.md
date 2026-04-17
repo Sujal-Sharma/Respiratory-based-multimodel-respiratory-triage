@@ -1,3 +1,12 @@
+---
+title: RespiTriage AI
+emoji: 🫁
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+---
+
 # Multimodal Respiratory Triage Using Agentic AI
 
 An agentic AI system for respiratory disease triage using the **OPERA-CT** respiratory foundation model (NeurIPS 2024). The system processes cough/breathing audio and patient symptoms through specialist AI agents, producing structured clinical triage decisions via deterministic rule-based reasoning.
@@ -91,6 +100,7 @@ Total OPERA embeddings extracted: **11,579 `.npy` files** (768-dim each)
 
 ```
 ├── server.py                           # Flask web server (main entry point)
+├── Dockerfile                          # HF Spaces deployment
 ├── requirements.txt
 ├── agents/
 │   ├── copd_agent.py                   # COPD binary specialist (OPERA + MLP)
@@ -120,17 +130,13 @@ Total OPERA embeddings extracted: **11,579 `.npy` files** (768-dim each)
 │   │   ├── doctor.html                 # Doctor patient list portal
 │   │   └── doctor_patient.html         # Doctor patient detail + Tier 2 assessment
 │   └── static/
-│       ├── css/
-│       └── js/
 ├── scripts/                            # Training + evaluation scripts
-│   ├── build_label_csvs.py
-│   ├── extract_opera_embeddings.py
-│   ├── train_binary_agent.py
-│   ├── train_pneumonia_cv.py
-│   ├── train_sound_3class.py
-│   └── evaluate_models.py
+├── saved_models/                       # Trained model weights (4.7 MB)
+│   ├── copd_opera_mlp.pt
+│   ├── pneumonia_opera_mlp.pt
+│   ├── cough_opera_mlp.pt
+│   └── sound_opera_mlp_3class.pt
 ├── data/                               # Label CSVs (embeddings excluded from repo)
-├── saved_models/                       # Trained weights (excluded from repo)
 └── outputs/                            # Evaluation figures (excluded from repo)
 ```
 
@@ -148,8 +154,8 @@ python -m venv triage_env
 triage_env\Scripts\activate      # Windows
 source triage_env/bin/activate   # Linux/Mac
 
-# 3. Install PyTorch with CUDA
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# 3. Install PyTorch with CUDA (local development)
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # 4. Install dependencies
 pip install -r requirements.txt
@@ -158,9 +164,9 @@ pip install -r requirements.txt
 git clone https://github.com/evelyn0414/OPERA.git
 pip install pytorch-lightning torchmetrics efficientnet-pytorch timm torchlibrosa huggingface-hub
 
-# 6. Set environment variables
-# Create a .env file:
+# 6. Set environment variables — create a .env file:
 GROQ_API_KEY=your_groq_api_key_here
+SECRET_KEY=your_secret_key_here
 
 # 7. Run the web app
 python server.py
@@ -169,56 +175,28 @@ python server.py
 
 ---
 
-## Training Pipeline (if reproducing from scratch)
+## Deploying to Hugging Face Spaces
 
+1. Create a new Space at huggingface.co → Docker SDK
+2. Add repository secrets: `GROQ_API_KEY`, `SECRET_KEY`
+3. Push this repo to the Space:
 ```bash
-# Step 1 — Parse datasets + build label CSVs
-python scripts/fix_kauh_parser.py
-python scripts/convert_coughvid_webm.py   # if using COUGHVID .webm files
-python scripts/build_label_csvs.py
-
-# Step 2 — Extract OPERA-CT embeddings (one-time, ~2-3 hours)
-python scripts/extract_opera_embeddings.py
-
-# Step 3 — Train models
-python scripts/train_binary_agent.py       # DISEASE='COPD' then 'Pneumonia'
-python scripts/train_pneumonia_cv.py       # 5-fold CV for Pneumonia
-python scripts/train_sound_3class.py       # 3-class sound classifier
-
-# Step 4 — Evaluate
-python scripts/evaluate_models.py
+git remote add space https://huggingface.co/spaces/your-username/respitriage
+git push space main
 ```
 
 ---
 
-## Using the Pipeline Directly
+## Training Pipeline (reproducing from scratch)
 
-```python
-from pipeline.triage_graph import run_triage
-
-result = run_triage(
-    patient_info={
-        "age": 58, "gender": "male",
-        "symptoms": ["difficulty breathing", "wheezing"],
-        "fever_muscle_pain": False,
-        "respiratory_condition": True,
-        "cough_detected": 0.8,
-        "dyspnea": True,
-        "dyspnea_level": 2,
-        "wheezing": True,
-        "congestion": False,
-        "chest_tightness": 2,
-        "sleep_quality": 1,
-        "energy_level": 2,
-        "sputum": 1,
-    },
-    cough_audio_path="path/to/cough.wav",
-    vowel_audio_path="path/to/vowel.wav",
-    lung_audio_path="",          # empty for Tier 1, stethoscope path for Tier 2
-    patient_id="patient_1",
-)
-print(result["triage_decision"])
-# {'diagnosis': ..., 'severity': ..., 'referral_urgency': ..., 'reasoning': ...}
+```bash
+python scripts/fix_kauh_parser.py
+python scripts/build_label_csvs.py
+python scripts/extract_opera_embeddings.py   # ~2-3 hours
+python scripts/train_binary_agent.py          # DISEASE='COPD' then 'Pneumonia'
+python scripts/train_pneumonia_cv.py
+python scripts/train_sound_3class.py
+python scripts/evaluate_models.py
 ```
 
 ---
@@ -238,7 +216,6 @@ print(result["triage_decision"])
 |---|---|
 | `DATASET/` | Raw audio files — too large |
 | `OPERA/` | 514 MB cloned repo — install separately |
-| `saved_models/` | Trained model weights |
 | `data/opera_embeddings/` | 11,579 `.npy` embedding files |
 | `data/sessions.db` | Runtime database — generated on first run |
 | `outputs/` | Generated evaluation figures |
@@ -263,4 +240,5 @@ print(result["triage_decision"])
 - [x] Animated landing page — Bootstrap + Tailwind + AOS
 - [x] Mobile responsive — hamburger sidebar for patient/doctor portals
 - [x] LLM symptom validator — Groq free-text validation in both portals
-- [ ] Deployment — Railway + Turso
+- [x] Docker deployment — Hugging Face Spaces ready
+- [ ] Persistent database — Turso integration
