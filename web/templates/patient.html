@@ -217,8 +217,8 @@
     </div>
     <div id="baseline-notice" style="display:none;" class="alert alert-info mt-2"></div>
     <div id="result-alerts"></div>
-    <button class="btn btn-outline-primary mt-3" onclick="switchTab('history'); location.reload();">
-      <i class="bi bi-clock-history me-1"></i>View History
+    <button class="btn btn-outline-primary mt-3" onclick="location.href=location.pathname+'?tab=history'">
+      <i class="bi bi-clock-history me-1"></i>View Updated History
     </button>
   </div>
 </div>
@@ -362,6 +362,12 @@ function switchTab(name) {
     document.getElementById('nav-'+t).classList.toggle('active', t===name);
   });
 }
+
+// Auto-switch tab if ?tab=history in URL
+(function() {
+  const tab = new URLSearchParams(window.location.search).get('tab');
+  if (tab) switchTab(tab);
+})();
 
 // ── Audio preview ──
 ['vowel','cough'].forEach(k => {

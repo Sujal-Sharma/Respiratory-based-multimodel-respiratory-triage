@@ -37,4 +37,4 @@ RUN mkdir -p data
 EXPOSE 7860
 
 # Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:7860", "--timeout", "300", "--workers", "1", "--threads", "2", "server:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:7860", "--timeout", "300", "--workers", "1", "--threads", "2", "--capture-output", "--enable-stdio-inheritance", "server:app"]
