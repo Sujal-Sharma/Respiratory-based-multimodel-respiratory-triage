@@ -196,13 +196,9 @@ def run_voice_agent(state: TriageState) -> dict:
 
 def run_cough_drift(state: TriageState) -> dict:
     """Compute OPERA-CT cough embedding drift from personal baseline (Tier 1)."""
-    import sys as _sys
     cough_path = state.get("cough_audio_path", "")
-    _sys.stderr.write(f"[triage] CoughDrift: cough_path={cough_path!r}\n"); _sys.stderr.flush()
     if not cough_path:
-        _sys.stderr.write("[triage] CoughDrift: no cough file — skipping\n"); _sys.stderr.flush()
         return {"drift_score": 0.0}
-    _sys.stderr.write(f"[triage] CoughDrift: file exists={os.path.exists(cough_path)}\n"); _sys.stderr.flush()
 
     print("[triage] Computing cough drift ...")
     patient_id = state.get("patient_id", "anonymous")
@@ -213,17 +209,13 @@ def run_cough_drift(state: TriageState) -> dict:
         from models.opera_encoder import OPERAEncoder
         enc = OPERAEncoder()
         current_emb = enc.encode(cough_path)
-        _sys.stderr.write(f"[triage] CoughDrift: OPERA encode={type(current_emb)}, shape={getattr(current_emb,'shape',None)}\n"); _sys.stderr.flush()
 
         if current_emb is None:
-            print("[triage] CoughDrift: OPERA returned None — audio may be too short or corrupt")
             return {"drift_score": 0.0}
 
-        # Check if cough baseline exists (may have voice features but no cough yet)
         has_cough_baseline = (baseline is not None and
                               baseline.get('cough_embedding') is not None and
                               len(baseline['cough_embedding']) > 0)
-        _sys.stderr.write(f"[triage] CoughDrift: has_baseline={has_cough_baseline}, baseline_exists={baseline is not None}\n"); _sys.stderr.flush()
 
         if has_cough_baseline:
             drift = compute_cough_drift(current_emb, baseline['cough_embedding'])

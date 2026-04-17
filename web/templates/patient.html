@@ -624,15 +624,20 @@ async function saveProfile() {
     smoking: document.getElementById('p-smoke').checked,
     notes: document.getElementById('p-notes').value,
   };
-  const res = await fetch('/api/profile/save', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(data)
-  });
-  const d = await res.json();
   const el = document.getElementById('profile-alert');
-  el.innerHTML = d.ok
-    ? '<div class="alert alert-success py-2">Profile saved.</div>'
-    : '<div class="alert alert-danger py-2">Save failed.</div>';
+  try {
+    const res = await fetch('/api/profile/save', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(data)
+    });
+    if (!res.ok && res.status !== 200) { el.innerHTML = '<div class="alert alert-danger py-2">Save failed (session expired — please refresh).</div>'; return; }
+    const d = await res.json();
+    el.innerHTML = d.ok
+      ? '<div class="alert alert-success py-2">Profile saved.</div>'
+      : '<div class="alert alert-danger py-2">Save failed.</div>';
+  } catch(e) {
+    el.innerHTML = '<div class="alert alert-danger py-2">Save failed — please refresh the page.</div>';
+  }
 }
 </script>
 {% endblock %}

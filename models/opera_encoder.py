@@ -46,40 +46,50 @@ def _to_wav_if_needed(file_path: str) -> tuple[str, bool]:
         return file_path, False
 
 
+def _get_mel_spectrogram(audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
+    """Inline reimplementation of OPERA's pre_process_audio_mel_t with f_max=8000.
+    Must match get_entire_signal_librosa which calls pre_process_audio_mel_t(yt, f_max=8000)."""
+    S = librosa.feature.melspectrogram(
+        y=audio, sr=sample_rate, n_mels=64, fmin=50, fmax=8000, n_fft=1024, hop_length=512)
+    S = librosa.power_to_db(S, ref=np.max)
+    if S.max() != S.min():
+        mel_db = (S - S.min()) / (S.max() - S.min())
+    else:
+        mel_db = S
+    return mel_db.T  # (time, mel_bins)
+
+
 def _preprocess_one(file_path: str, input_sec: int = 8) -> np.ndarray | None:
     """
     Load and preprocess one audio file to mel spectrogram.
-    Runs on CPU (called from thread pool).
-    Returns np.ndarray (mel_bins, time) or None on failure.
+    Inlines OPERA's get_entire_signal_librosa + pre_process_audio_mel_t
+    to avoid importing src.util (which pulls in matplotlib/seaborn).
     """
-    # Resolve to absolute path BEFORE chdir — chdir changes relative path resolution
+    sample_rate = SAMPLE_RATE
     file_path = os.path.abspath(file_path)
-
-    # Convert to WAV — OPERA's get_entire_signal_librosa appends .wav internally
-    # so webm/mp3/ogg/mp4 files would silently fail without this conversion
     wav_path, should_delete = _to_wav_if_needed(file_path)
-
-    orig_dir = os.getcwd()
-    os.chdir(OPERA_REPO)
     try:
-        from src.util import get_entire_signal_librosa
+        data, _ = librosa.load(wav_path, sr=sample_rate, mono=True)
 
-        # Strip .wav extension — OPERA appends .wav internally
-        base     = wav_path[:-4] if wav_path.endswith('.wav') else wav_path
-        folder   = os.path.dirname(base)
-        filename = os.path.basename(base)
+        # Trim silence
+        frame_len = sample_rate // 10
+        hop = frame_len // 2
+        yt, _ = librosa.effects.trim(data, frame_length=frame_len, hop_length=hop)
 
-        spec = get_entire_signal_librosa(
-            folder, filename,
-            spectrogram=True,
-            input_sec=input_sec,
-            pad=True,
-        )
-        return np.array(spec, dtype=np.float32) if spec is not None else None
-    except Exception:
+        # Pad if shorter than input_sec
+        target_len = input_sec * sample_rate
+        duration = librosa.get_duration(y=yt, sr=sample_rate)
+        if duration < input_sec:
+            # Repeat-pad to target length
+            n_repeat = int(np.ceil(target_len / len(yt)))
+            yt = np.tile(yt, n_repeat)[:target_len]
+
+        return _get_mel_spectrogram(yt, sample_rate)
+    except Exception as _e:
+        import traceback as _tb
+        sys.stderr.write(f"[opera] preprocess ERROR: {_e}\n{_tb.format_exc()}\n"); sys.stderr.flush()
         return None
     finally:
-        os.chdir(orig_dir)
         if should_delete:
             try:
                 os.unlink(wav_path)

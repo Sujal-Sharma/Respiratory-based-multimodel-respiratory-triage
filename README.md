@@ -17,9 +17,9 @@ An agentic AI system for respiratory disease triage using the **OPERA-CT** respi
 
 ## Live Demo
 
-> Run locally: `python server.py` → open `http://127.0.0.1:5000`
+**Hugging Face Spaces:** https://huggingface.co/spaces/SujalSha/respitriage
 
-**Demo credentials:** `doctor` / `doctor123`
+> Run locally: `python server.py` → open `http://127.0.0.1:5000`
 
 ---
 
@@ -110,7 +110,7 @@ Total OPERA embeddings extracted: **11,579 `.npy` files** (768-dim each)
 │   ├── symptom_agent.py                # CAT-style clinical symptom scorer
 │   └── session_agent.py                # Session recording + deterioration alerts
 ├── models/
-│   ├── opera_encoder.py                # Batched GPU OPERA-CT encoder
+│   ├── opera_encoder.py                # Batched OPERA-CT encoder (librosa mel preprocessing)
 │   ├── mlp_classifier.py               # BinaryMLP + SoundMLP + FocalLoss
 │   └── embedding_dataset.py            # PyTorch Dataset for pre-computed embeddings
 ├── pipeline/
@@ -146,8 +146,8 @@ Total OPERA embeddings extracted: **11,579 `.npy` files** (768-dim each)
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/Sujal-Sharma/Respiratory-based-multimodel-respiratory-triage.git
-cd Respiratory-based-multimodel-respiratory-triage
+git clone https://github.com/SujalSharma123/CAPSTONE_JOURNAL.git
+cd CAPSTONE_JOURNAL
 
 # 2. Create virtual environment
 python -m venv triage_env
@@ -160,7 +160,7 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 # 4. Install dependencies
 pip install -r requirements.txt
 
-# 5. Clone OPERA (required for embedding extraction only)
+# 5. Clone OPERA (required for model loading only)
 git clone https://github.com/evelyn0414/OPERA.git
 pip install pytorch-lightning torchmetrics efficientnet-pytorch timm torchlibrosa huggingface-hub
 
@@ -179,10 +179,13 @@ python server.py
 
 1. Create a new Space at huggingface.co → Docker SDK
 2. Add repository secrets: `GROQ_API_KEY`, `SECRET_KEY`
-3. Push this repo to the Space:
-```bash
-git remote add space https://huggingface.co/spaces/your-username/respitriage
-git push space main
+3. Enable Persistent Storage and mount at `/data`
+4. Upload via HuggingFace Hub API (avoids git LFS issues with `.pt` files):
+```python
+from huggingface_hub import HfApi
+api = HfApi(token='your_hf_token')
+api.upload_folder(folder_path='.', repo_id='your-username/space-name', repo_type='space',
+                  ignore_patterns=['*.pyc','__pycache__','triage_env','OPERA','data/opera_embeddings'])
 ```
 
 ---
@@ -235,10 +238,9 @@ python scripts/evaluate_models.py
 - [x] Rule Engine — deterministic BTS/GOLD/GINA guidelines
 - [x] LangGraph pipeline — two-tier agentic routing
 - [x] Longitudinal monitoring — 3-signal fusion + drift detection
-- [x] Session store — SQLite + deterioration alerts
-- [x] Flask web app — replaced Streamlit
-- [x] Animated landing page — Bootstrap + Tailwind + AOS
-- [x] Mobile responsive — hamburger sidebar for patient/doctor portals
-- [x] LLM symptom validator — Groq free-text validation in both portals
-- [x] Docker deployment — Hugging Face Spaces ready
-- [ ] Persistent database — Turso integration
+- [x] Session store — SQLite + HF persistent storage
+- [x] Flask web app — patient + doctor portals
+- [x] Animated landing page — Bootstrap + AOS
+- [x] Mobile responsive — hamburger sidebar
+- [x] LLM symptom validator — Groq free-text validation
+- [x] Docker deployment — Hugging Face Spaces

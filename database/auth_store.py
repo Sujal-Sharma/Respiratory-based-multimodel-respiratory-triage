@@ -132,14 +132,17 @@ class AuthStore:
     def update_profile(self, user_id: int, age: int, gender: str,
                        respiratory_condition: bool, smoking: bool,
                        notes: str = '') -> bool:
+        now = datetime.now().isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
-                UPDATE patient_profiles
-                SET age=?, gender=?, respiratory_condition=?,
-                    smoking=?, notes=?, updated_at=?
-                WHERE user_id=?
-            """, (age, gender, int(respiratory_condition), int(smoking),
-                  notes, datetime.now().isoformat(), user_id))
+                INSERT INTO patient_profiles (user_id, age, gender, respiratory_condition, smoking, notes, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    age=excluded.age, gender=excluded.gender,
+                    respiratory_condition=excluded.respiratory_condition,
+                    smoking=excluded.smoking, notes=excluded.notes,
+                    updated_at=excluded.updated_at
+            """, (user_id, age, gender, int(respiratory_condition), int(smoking), notes, now))
             conn.commit()
         return True
 
