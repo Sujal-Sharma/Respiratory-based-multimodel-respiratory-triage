@@ -15,7 +15,7 @@ import hashlib
 import secrets
 from datetime import datetime
 
-DB_PATH = './data/sessions.db'
+DB_PATH = '/data/sessions.db' if os.path.isdir('/data') else './data/sessions.db'
 
 
 def _hash_password(password: str, salt: str) -> str:

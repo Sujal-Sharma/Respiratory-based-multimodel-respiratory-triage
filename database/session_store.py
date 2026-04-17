@@ -15,7 +15,7 @@ from datetime import datetime
 
 import numpy as np
 
-DB_PATH = './data/sessions.db'
+DB_PATH = '/data/sessions.db' if os.path.isdir('/data') else './data/sessions.db'
 
 
 class SessionStore:
