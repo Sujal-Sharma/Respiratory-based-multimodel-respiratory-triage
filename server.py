@@ -33,6 +33,16 @@ class NumpyJSONProvider(DefaultJSONProvider):
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+def _ensure_wav(src: str, dst: str) -> str:
+    """Convert any audio file to WAV so OPERA/parselmouth can read it reliably."""
+    try:
+        import librosa, soundfile as sf
+        y, sr = librosa.load(src, sr=16000, mono=True)
+        sf.write(dst, y, sr)
+        return dst
+    except Exception:
+        return src  # fallback — return original if conversion fails
+
 from database.auth_store    import AuthStore
 from database.session_store import SessionStore
 from pipeline.longitudinal  import interpret_score
@@ -269,15 +279,17 @@ def api_screen():
 
             vowel_file = request.files.get('vowel_file')
             if vowel_file and vowel_file.filename:
-                ext = vowel_file.filename.rsplit('.', 1)[-1]
-                vowel_path = os.path.join(tmpdir, f'vowel.{ext}')
-                vowel_file.save(vowel_path)
+                ext = vowel_file.filename.rsplit('.', 1)[-1].lower() or 'webm'
+                raw_path = os.path.join(tmpdir, f'vowel_raw.{ext}')
+                vowel_file.save(raw_path)
+                vowel_path = _ensure_wav(raw_path, os.path.join(tmpdir, 'vowel.wav'))
 
             cough_file = request.files.get('cough_file')
             if cough_file and cough_file.filename:
-                ext = cough_file.filename.rsplit('.', 1)[-1]
-                cough_path = os.path.join(tmpdir, f'cough.{ext}')
-                cough_file.save(cough_path)
+                ext = cough_file.filename.rsplit('.', 1)[-1].lower() or 'webm'
+                raw_path = os.path.join(tmpdir, f'cough_raw.{ext}')
+                cough_file.save(raw_path)
+                cough_path = _ensure_wav(raw_path, os.path.join(tmpdir, 'cough.wav'))
 
             from pipeline.triage_graph import run_triage
             result = run_triage(patient_info,
@@ -347,9 +359,10 @@ def api_tier2():
 
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            ext = lung_file.filename.rsplit('.', 1)[-1]
-            lung_path = os.path.join(tmpdir, f'lung.{ext}')
-            lung_file.save(lung_path)
+            ext = lung_file.filename.rsplit('.', 1)[-1].lower() or 'webm'
+            raw_path = os.path.join(tmpdir, f'lung_raw.{ext}')
+            lung_file.save(raw_path)
+            lung_path = _ensure_wav(raw_path, os.path.join(tmpdir, 'lung.wav'))
 
             from pipeline.triage_graph import run_triage
             result = run_triage(patient_info,

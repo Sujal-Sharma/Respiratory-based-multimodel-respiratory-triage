@@ -525,6 +525,8 @@ document.getElementById('screen-form').addEventListener('submit', async function
     hideSpinner();
     if (!d.ok) { alert(d.error||'Screening failed'); return; }
     renderResult(d);
+    // Reload page after 3s so history tab updates with new session
+    setTimeout(() => location.reload(), 3000);
   } catch(err) {
     hideSpinner();
     if (err.name === 'AbortError') alert('Request timed out. The pipeline took too long.');
