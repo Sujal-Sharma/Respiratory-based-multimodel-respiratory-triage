@@ -217,6 +217,9 @@
     </div>
     <div id="baseline-notice" style="display:none;" class="alert alert-info mt-2"></div>
     <div id="result-alerts"></div>
+    <button class="btn btn-outline-primary mt-3" onclick="switchTab('history'); location.reload();">
+      <i class="bi bi-clock-history me-1"></i>View History
+    </button>
   </div>
 </div>
 
@@ -525,8 +528,6 @@ document.getElementById('screen-form').addEventListener('submit', async function
     hideSpinner();
     if (!d.ok) { alert(d.error||'Screening failed'); return; }
     renderResult(d);
-    // Reload page after 10s so user can read results before history tab updates
-    setTimeout(() => location.reload(), 10000);
   } catch(err) {
     hideSpinner();
     if (err.name === 'AbortError') alert('Request timed out. The pipeline took too long.');
