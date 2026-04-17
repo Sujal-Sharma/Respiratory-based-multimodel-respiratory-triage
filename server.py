@@ -41,6 +41,10 @@ app = Flask(__name__, template_folder='web/templates', static_folder='web/static
 app.secret_key = os.environ.get('SECRET_KEY', 'respitriage-secret-2026')
 app.json_provider_class = NumpyJSONProvider
 app.json = NumpyJSONProvider(app)
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 auth_store    = AuthStore()
 session_store = SessionStore()
