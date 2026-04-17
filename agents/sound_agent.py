@@ -45,7 +45,7 @@ class SoundAgent:
 
     AGENT_NAME = 'Sound Agent'
 
-    def __init__(self, model_path: str = _DEFAULT_MODEL_PATH, device: str = 'cuda'):
+    def __init__(self, model_path: str = _DEFAULT_MODEL_PATH, device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
         self.device = device
         self.encoder = OPERAEncoder(pretrain='operaCT')
 

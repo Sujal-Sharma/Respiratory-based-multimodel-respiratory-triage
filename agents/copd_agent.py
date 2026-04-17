@@ -32,7 +32,7 @@ class COPDAgent:
 
     def __init__(self,
                  model_path: str = _DEFAULT_MODEL_PATH,
-                 device: str = 'cuda'):
+                 device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
         self.device = device
 
         # OPERA encoder (checkpoint auto-downloads from HuggingFace)
