@@ -197,9 +197,10 @@ def run_voice_agent(state: TriageState) -> dict:
 def run_cough_drift(state: TriageState) -> dict:
     """Compute OPERA-CT cough embedding drift from personal baseline (Tier 1)."""
     cough_path = state.get("cough_audio_path", "")
-    lung_path  = state.get("lung_audio_path", "")
     if not cough_path:
+        print("[triage] CoughDrift: no cough file uploaded — skipping")
         return {"drift_score": 0.0}
+    print(f"[triage] CoughDrift: processing {cough_path}")
 
     print("[triage] Computing cough drift ...")
     patient_id = state.get("patient_id", "anonymous")

@@ -217,9 +217,6 @@
     </div>
     <div id="baseline-notice" style="display:none;" class="alert alert-info mt-2"></div>
     <div id="result-alerts"></div>
-    <button class="btn btn-outline-primary mt-3" onclick="location.href=location.pathname+'?tab=history'">
-      <i class="bi bi-clock-history me-1"></i>View Updated History
-    </button>
   </div>
 </div>
 
@@ -229,58 +226,10 @@
     <span class="page-header-icon">📈</span>
     <div><h1>My Screening History</h1><p>Longitudinal respiratory risk trend</p></div>
   </div>
-
-  {% if history %}
-  <div class="row g-3 mb-4">
-    <div class="col"><div class="metric-card text-center"><div class="metric-label">Total Sessions</div><div class="metric-value">{{ history|length }}</div></div></div>
-    <div class="col"><div class="metric-card text-center"><div class="metric-label">Latest Severity</div><div class="metric-value fs-5"><span class="sev-badge sev-{{ history[0].severity }}">{{ history[0].severity }}</span></div></div></div>
-    <div class="col"><div class="metric-card text-center"><div class="metric-label">Latest Risk</div><div class="metric-value">{{ "%.0f%%"|format(history[0].get('longitudinal_score',0)*100) }}</div></div></div>
-    <div class="col"><div class="metric-card text-center"><div class="metric-label">Avg COPD Risk</div><div class="metric-value">{{ "%.0f%%"|format((history|map(attribute='copd_confidence')|list|sum / history|length)*100) }}</div></div></div>
-    <div class="col"><div class="metric-card text-center"><div class="metric-label">Avg Pneu Risk</div><div class="metric-value">{{ "%.0f%%"|format((history|map(attribute='pneu_confidence')|list|sum / history|length)*100) }}</div></div></div>
+  <div id="history-loading" class="text-center py-4" style="display:none;">
+    <div class="spinner-border text-primary"></div><p class="mt-2 text-muted">Loading history...</p>
   </div>
-
-  {% if alerts %}{% for a in alerts %}
-  <div class="alert alert-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>{{ a.message }}</div>
-  {% endfor %}{% endif %}
-
-  <div class="card p-3 mb-4">
-    <div style="position:relative;height:260px;">
-      <canvas id="historyChart"></canvas>
-    </div>
-  </div>
-
-  <div class="card p-0">
-    <div class="card-header-styled"><i class="bi bi-table me-2"></i>Session Log</div>
-    <div class="table-responsive">
-      <table class="table table-striped mb-0">
-        <thead>
-          <tr>
-            <th>Timestamp</th><th>Tier</th><th>Severity</th><th>Diagnosis</th>
-            <th>Risk Score</th><th>Symptom</th><th>Voice</th><th>Cough Drift</th><th>COPD</th><th>Pneu</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for s in history %}
-          <tr>
-            <td>{{ s.timestamp[:16] }}</td>
-            <td><span class="badge bg-secondary">T{{ s.tier }}</span></td>
-            <td><span class="sev-badge sev-{{ s.severity }}">{{ s.severity }}</span></td>
-            <td>{{ s.diagnosis or '—' }}</td>
-            <td>{{ "%.0f%%"|format(s.get('longitudinal_score',0)*100) }}</td>
-            <td>{{ "%.0f%%"|format(s.get('symptom_index',0)*100) }}</td>
-            <td>{{ "%.0f%%"|format(s.get('voice_index',0)*100) }}</td>
-            <td>{{ "%.0f%%"|format(s.get('drift_score',0)*100) }}</td>
-            <td>{{ "%.0f%%"|format(s.copd_confidence*100) }}</td>
-            <td>{{ "%.0f%%"|format(s.pneu_confidence*100) }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  {% else %}
-  <div class="alert alert-info"><i class="bi bi-info-circle me-2"></i>No sessions yet. Run a Self-Screen first.</div>
-  {% endif %}
+  <div id="history-content"></div>
 </div>
 
 <!-- ══ PROFILE ══════════════════════════════════════════════════════════════ -->
@@ -361,13 +310,8 @@ function switchTab(name) {
     document.getElementById('tab-'+t).style.display = t===name ? '' : 'none';
     document.getElementById('nav-'+t).classList.toggle('active', t===name);
   });
+  if (name === 'history') loadHistory();
 }
-
-// Auto-switch tab if ?tab=history in URL
-(function() {
-  const tab = new URLSearchParams(window.location.search).get('tab');
-  if (tab) switchTab(tab);
-})();
 
 // ── Audio preview ──
 ['vowel','cough'].forEach(k => {
@@ -590,57 +534,86 @@ function renderResult(d) {
   ).join('');
 }
 
-// ── History chart ──
-{% if history %}
-(function(){
-  const raw = {{ history|tojson }};
-  const sessions = raw.slice().reverse();
+// ── Dynamic history ──
+let _historyChart = null;
+
+function renderHistory(history, alerts) {
+  const content = document.getElementById('history-content');
+  if (!history || !history.length) {
+    content.innerHTML = '<div class="alert alert-info"><i class="bi bi-info-circle me-2"></i>No sessions yet. Run a Self-Screen first.</div>';
+    return;
+  }
+  const latest = history[0];
+  const avgCopd = history.reduce((s,r)=>s+(r.copd_confidence||0),0)/history.length;
+  const avgPneu = history.reduce((s,r)=>s+(r.pneu_confidence||0),0)/history.length;
+
+  const alertsHtml = (alerts||[]).map(a=>
+    `<div class="alert alert-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>${a.message}</div>`
+  ).join('');
+
+  const rows = history.map(s => `<tr>
+    <td>${s.timestamp.slice(0,16)}</td>
+    <td><span class="badge bg-secondary">T${s.tier}</span></td>
+    <td><span class="sev-badge sev-${s.severity}">${s.severity}</span></td>
+    <td>${s.diagnosis||'—'}</td>
+    <td>${(((s.longitudinal_score||0)*100).toFixed(0))}%</td>
+    <td>${(((s.symptom_index||0)*100).toFixed(0))}%</td>
+    <td>${(((s.voice_index||0)*100).toFixed(0))}%</td>
+    <td>${(((s.drift_score||0)*100).toFixed(0))}%</td>
+    <td>${(((s.copd_confidence||0)*100).toFixed(0))}%</td>
+    <td>${(((s.pneu_confidence||0)*100).toFixed(0))}%</td>
+  </tr>`).join('');
+
+  content.innerHTML = `
+    <div class="row g-3 mb-4">
+      <div class="col"><div class="metric-card text-center"><div class="metric-label">Total Sessions</div><div class="metric-value">${history.length}</div></div></div>
+      <div class="col"><div class="metric-card text-center"><div class="metric-label">Latest Severity</div><div class="metric-value fs-5"><span class="sev-badge sev-${latest.severity}">${latest.severity}</span></div></div></div>
+      <div class="col"><div class="metric-card text-center"><div class="metric-label">Latest Risk</div><div class="metric-value">${((latest.longitudinal_score||0)*100).toFixed(0)}%</div></div></div>
+      <div class="col"><div class="metric-card text-center"><div class="metric-label">Avg COPD Risk</div><div class="metric-value">${(avgCopd*100).toFixed(0)}%</div></div></div>
+      <div class="col"><div class="metric-card text-center"><div class="metric-label">Avg Pneu Risk</div><div class="metric-value">${(avgPneu*100).toFixed(0)}%</div></div></div>
+    </div>
+    ${alertsHtml}
+    <div class="card p-3 mb-4"><div style="position:relative;height:260px;"><canvas id="historyChart"></canvas></div></div>
+    <div class="card p-0">
+      <div class="card-header-styled"><i class="bi bi-table me-2"></i>Session Log</div>
+      <div class="table-responsive">
+        <table class="table table-striped mb-0">
+          <thead><tr><th>Timestamp</th><th>Tier</th><th>Severity</th><th>Diagnosis</th><th>Risk Score</th><th>Symptom</th><th>Voice</th><th>Cough Drift</th><th>COPD</th><th>Pneu</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  // Render chart
+  if (_historyChart) { _historyChart.destroy(); _historyChart = null; }
+  const sessions = history.slice().reverse();
   const labels = sessions.map((_,i) => 'S'+(i+1));
-  const get = (key) => sessions.map(s => s[key]||0);
-  new Chart(document.getElementById('historyChart'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label:'Longitudinal Score',
-          data:get('longitudinal_score'),
-          borderColor:'#7c3aed', backgroundColor:'rgba(124,58,237,.12)',
-          fill:true, tension:.35, borderWidth:2.5,
-          pointRadius:4, pointHoverRadius:6, pointBackgroundColor:'#7c3aed',
-        },
-        {
-          label:'Symptom Index',
-          data:get('symptom_index'),
-          borderColor:'#ef4444', backgroundColor:'transparent',
-          fill:false, tension:.35, borderWidth:2,
-          borderDash:[6,3], pointRadius:3, pointHoverRadius:5, pointBackgroundColor:'#ef4444',
-        },
-        {
-          label:'Voice Index',
-          data:get('voice_index'),
-          borderColor:'#3b82f6', backgroundColor:'transparent',
-          fill:false, tension:.35, borderWidth:2,
-          borderDash:[6,3], pointRadius:3, pointHoverRadius:5, pointBackgroundColor:'#3b82f6',
-        },
-      ]
-    },
-    options: {
-      responsive:true,
-      maintainAspectRatio:false,
-      interaction:{mode:'index', intersect:false},
-      plugins:{
-        legend:{position:'bottom', labels:{boxWidth:12, font:{size:11}, padding:16}},
-        tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+(ctx.parsed.y*100).toFixed(0)+'%'}}
-      },
-      scales:{
-        y:{min:0, max:1.0, grid:{color:'rgba(0,0,0,.06)'}, ticks:{callback:v=>(v*100).toFixed(0)+'%', font:{size:11}, stepSize:0.2}},
-        x:{grid:{display:false}, ticks:{font:{size:11}}}
-      }
-    }
+  const get = k => sessions.map(s => s[k]||0);
+  _historyChart = new Chart(document.getElementById('historyChart'), {
+    type:'line',
+    data:{labels, datasets:[
+      {label:'Longitudinal Score', data:get('longitudinal_score'), borderColor:'#7c3aed', backgroundColor:'rgba(124,58,237,.12)', fill:true, tension:.35, borderWidth:2.5, pointRadius:4, pointHoverRadius:6, pointBackgroundColor:'#7c3aed'},
+      {label:'Symptom Index', data:get('symptom_index'), borderColor:'#ef4444', backgroundColor:'transparent', fill:false, tension:.35, borderWidth:2, borderDash:[6,3], pointRadius:3, pointHoverRadius:5, pointBackgroundColor:'#ef4444'},
+      {label:'Voice Index', data:get('voice_index'), borderColor:'#3b82f6', backgroundColor:'transparent', fill:false, tension:.35, borderWidth:2, borderDash:[6,3], pointRadius:3, pointHoverRadius:5, pointBackgroundColor:'#3b82f6'},
+    ]},
+    options:{responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11},padding:16}}, tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+(ctx.parsed.y*100).toFixed(0)+'%'}}},
+      scales:{y:{min:0,max:1.0,grid:{color:'rgba(0,0,0,.06)'},ticks:{callback:v=>(v*100).toFixed(0)+'%',font:{size:11},stepSize:0.2}}, x:{grid:{display:false},ticks:{font:{size:11}}}}}
   });
-})();
-{% endif %}
+}
+
+async function loadHistory() {
+  document.getElementById('history-loading').style.display = '';
+  document.getElementById('history-content').innerHTML = '';
+  try {
+    const res = await fetch('/api/history');
+    const d = await res.json();
+    if (d.ok) renderHistory(d.history, d.alerts);
+  } catch(e) {
+    document.getElementById('history-content').innerHTML = '<div class="alert alert-danger">Failed to load history.</div>';
+  }
+  document.getElementById('history-loading').style.display = 'none';
+}
 
 // ── Save profile ──
 async function saveProfile() {

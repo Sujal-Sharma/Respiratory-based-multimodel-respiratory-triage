@@ -219,6 +219,16 @@ def api_logout():
     return jsonify({'ok': True})
 
 
+@app.route('/api/history', methods=['GET'])
+@login_required
+def api_history():
+    user = session['user']
+    patient_id = f"patient_{user['id']}"
+    history = session_store.get_sessions(patient_id, n=30)
+    alerts  = session_store.check_deterioration(patient_id) or []
+    return jsonify({'ok': True, 'history': history, 'alerts': alerts})
+
+
 @app.route('/api/validate-symptoms', methods=['POST'])
 @login_required
 def api_validate_symptoms():
