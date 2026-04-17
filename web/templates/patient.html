@@ -253,7 +253,7 @@
         <thead>
           <tr>
             <th>Timestamp</th><th>Tier</th><th>Severity</th><th>Diagnosis</th>
-            <th>Risk Score</th><th>Symptom</th><th>Voice</th><th>COPD</th><th>Pneu</th>
+            <th>Risk Score</th><th>Symptom</th><th>Voice</th><th>Cough Drift</th><th>COPD</th><th>Pneu</th>
           </tr>
         </thead>
         <tbody>
@@ -266,6 +266,7 @@
             <td>{{ "%.0f%%"|format(s.get('longitudinal_score',0)*100) }}</td>
             <td>{{ "%.0f%%"|format(s.get('symptom_index',0)*100) }}</td>
             <td>{{ "%.0f%%"|format(s.get('voice_index',0)*100) }}</td>
+            <td>{{ "%.0f%%"|format(s.get('drift_score',0)*100) }}</td>
             <td>{{ "%.0f%%"|format(s.copd_confidence*100) }}</td>
             <td>{{ "%.0f%%"|format(s.pneu_confidence*100) }}</td>
           </tr>
