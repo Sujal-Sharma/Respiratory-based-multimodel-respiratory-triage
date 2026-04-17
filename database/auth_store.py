@@ -2,7 +2,7 @@
 database/auth_store.py — User authentication and profile storage.
 
 Manages patient and doctor accounts in SQLite.
-Passwords are hashed with bcrypt.
+Passwords are hashed with sha-256 + salt.
 
 Tables:
   users    — account credentials + role (patient / doctor)
