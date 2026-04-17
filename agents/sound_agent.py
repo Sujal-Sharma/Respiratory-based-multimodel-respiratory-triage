@@ -14,7 +14,7 @@ import torch.nn as nn
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from models.opera_encoder import OPERAEncoder
 
-_DEFAULT_MODEL_PATH = './saved_models/sound_opera_mlp_3class.pt'
+_DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'saved_models', 'sound_opera_mlp_3class.pt')
 
 SOUND_LABELS = {0: 'Normal', 1: 'Crackle', 2: 'Wheeze'}
 

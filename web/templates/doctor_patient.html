@@ -98,8 +98,8 @@
           <td>{{ "%.0f%%"|format(s.get('symptom_index',0)*100) }}</td>
           <td>{{ "%.0f%%"|format(s.get('voice_index',0)*100) }}</td>
           <td>{{ "%.0f%%"|format(s.get('drift_score',0)*100) }}</td>
-          <td>{{ "%.0f%%"|format(s.copd_confidence*100) }}</td>
-          <td>{{ "%.0f%%"|format(s.pneu_confidence*100) }}</td>
+          <td>{{ "%.0f%%"|format(s.get('copd_confidence',0)*100) }}</td>
+          <td>{{ "%.0f%%"|format(s.get('pneu_confidence',0)*100) }}</td>
         </tr>
         {% endfor %}
       </tbody>

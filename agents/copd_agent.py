@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from models.mlp_classifier import BinaryMLPClassifier
 from models.opera_encoder import OPERAEncoder
 
-_DEFAULT_MODEL_PATH = './saved_models/copd_opera_mlp.pt'
+_DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'saved_models', 'copd_opera_mlp.pt')
 
 
 class COPDAgent:
