@@ -300,6 +300,9 @@ def api_screen():
                 raw_path = os.path.join(tmpdir, f'cough_raw.{ext}')
                 cough_file.save(raw_path)
                 cough_path = _ensure_wav(raw_path, os.path.join(tmpdir, 'cough.wav'))
+                print(f"[server] Cough file received: {cough_file.filename} -> {cough_path} (exists={os.path.exists(cough_path)}, size={os.path.getsize(cough_path) if os.path.exists(cough_path) else 0})")
+            else:
+                print(f"[server] No cough file in request")
 
             from pipeline.triage_graph import run_triage
             result = run_triage(patient_info,

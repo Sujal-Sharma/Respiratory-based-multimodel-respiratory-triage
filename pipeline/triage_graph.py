@@ -211,18 +211,23 @@ def run_cough_drift(state: TriageState) -> dict:
         from models.opera_encoder import OPERAEncoder
         enc = OPERAEncoder()
         current_emb = enc.encode(cough_path)
+        print(f"[triage] CoughDrift: OPERA encode result = {type(current_emb)}, shape = {getattr(current_emb, 'shape', None)}")
+
+        if current_emb is None:
+            print("[triage] CoughDrift: OPERA returned None — audio may be too short or corrupt")
+            return {"drift_score": 0.0}
 
         # Check if cough baseline exists (may have voice features but no cough yet)
         has_cough_baseline = (baseline is not None and
                               baseline.get('cough_embedding') is not None and
                               len(baseline['cough_embedding']) > 0)
+        print(f"[triage] CoughDrift: has_baseline={has_cough_baseline}, baseline={baseline is not None}")
 
         if has_cough_baseline:
             drift = compute_cough_drift(current_emb, baseline['cough_embedding'])
             print(f"[triage] Cough drift: {drift:.4f}")
         else:
             drift = 0.0
-            # Preserve existing voice features when saving cough baseline
             existing_vf = (baseline.get('voice_features') or {}) if baseline else {}
             store.save_baseline(patient_id,
                                 voice_features=existing_vf,
@@ -230,6 +235,8 @@ def run_cough_drift(state: TriageState) -> dict:
             print(f"[triage] Cough baseline saved for {patient_id}")
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"[triage] CoughDrift error: {e}")
         drift = 0.0
 
