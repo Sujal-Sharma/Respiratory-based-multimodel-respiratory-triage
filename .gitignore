@@ -14,8 +14,8 @@ data/mfccs/
 data/_tmp_audio/
 data/.cache/
 
-# Saved model weights (too large for GitHub)
-saved_models/
+# Saved model weights (kept in repo — only 4.7 MB total)
+# saved_models/
 
 # Evaluation outputs (generated, not source code)
 outputs/
