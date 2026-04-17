@@ -295,14 +295,19 @@ def api_screen():
                 vowel_path = _ensure_wav(raw_path, os.path.join(tmpdir, 'vowel.wav'))
 
             cough_file = request.files.get('cough_file')
+            import sys as _sys
+            _sys.stderr.write(f"[server] cough_file={cough_file}, filename={getattr(cough_file,'filename',None)!r}\n")
+            _sys.stderr.flush()
             if cough_file and cough_file.filename:
                 ext = cough_file.filename.rsplit('.', 1)[-1].lower() or 'webm'
                 raw_path = os.path.join(tmpdir, f'cough_raw.{ext}')
                 cough_file.save(raw_path)
                 cough_path = _ensure_wav(raw_path, os.path.join(tmpdir, 'cough.wav'))
-                print(f"[server] Cough file received: {cough_file.filename} -> {cough_path} (exists={os.path.exists(cough_path)}, size={os.path.getsize(cough_path) if os.path.exists(cough_path) else 0})")
+                _sys.stderr.write(f"[server] Cough saved: {cough_path} exists={os.path.exists(cough_path)} size={os.path.getsize(cough_path) if os.path.exists(cough_path) else 0}\n")
+                _sys.stderr.flush()
             else:
-                print(f"[server] No cough file in request")
+                _sys.stderr.write("[server] No cough file in request\n")
+                _sys.stderr.flush()
 
             from pipeline.triage_graph import run_triage
             result = run_triage(patient_info,
