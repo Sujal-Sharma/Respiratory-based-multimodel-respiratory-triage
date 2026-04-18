@@ -24,6 +24,7 @@ from sklearn.metrics import (
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from models.mlp_classifier import BinaryMLPClassifier, FocalLoss
 from models.embedding_dataset import EmbeddingDataset
+from utils.threshold_optimizer import optimize_threshold, compute_threshold_metrics
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIG — change DISEASE to 'Pneumonia' for the second agent
@@ -43,6 +44,8 @@ LR             = 3e-4
 WEIGHT_DECAY   = 1e-4
 TARGET_RECALL  = 0.80    # clinical safety: must not miss 80%+ of cases
 RANDOM_STATE   = 42
+THRESHOLD_OBJECTIVE = 'youden_j'   # switch to 'f_ss' if you prefer symmetric sens/spec optimisation
+THRESHOLD_TRIALS    = 200
 # ══════════════════════════════════════════════════════════════════════════════
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -144,7 +147,6 @@ for epoch in range(MAX_EPOCHS):
 model.load_state_dict(best_model_state)
 model.eval()
 
-print(f"\n[train] Tuning threshold for recall >= {TARGET_RECALL}...")
 all_probs_val, all_labels_val = [], []
 with torch.no_grad():
     for embeddings, labels_batch in val_loader:
@@ -156,17 +158,39 @@ with torch.no_grad():
 all_probs_val  = np.array(all_probs_val)
 all_labels_val = np.array(all_labels_val)
 
-best_threshold    = 0.5
-best_threshold_f1 = 0.0
-for thresh in np.arange(0.20, 0.71, 0.01):
-    preds = (all_probs_val >= thresh).astype(int)
-    rec   = recall_score(all_labels_val, preds, pos_label=1, zero_division=0)
-    f1    = f1_score(all_labels_val, preds, average='macro', zero_division=0)
-    if rec >= TARGET_RECALL and f1 > best_threshold_f1:
-        best_threshold_f1 = f1
-        best_threshold    = thresh
+print(f"\n[train] Optimizing threshold with Optuna ({THRESHOLD_OBJECTIVE})...")
+best_threshold, threshold_metrics, threshold_study = optimize_threshold(
+    all_labels_val,
+    all_probs_val,
+    objective=THRESHOLD_OBJECTIVE,
+    n_trials=THRESHOLD_TRIALS,
+    seed=RANDOM_STATE,
+    low=0.01,
+    high=0.99,
+    min_recall=TARGET_RECALL,
+)
 
-print(f"[train] Best threshold: {best_threshold:.2f} | Val F1: {best_threshold_f1:.4f}")
+alt_objective = 'f_ss' if THRESHOLD_OBJECTIVE == 'youden_j' else 'youden_j'
+alt_threshold, alt_metrics, _ = optimize_threshold(
+    all_labels_val,
+    all_probs_val,
+    objective=alt_objective,
+    n_trials=THRESHOLD_TRIALS,
+    seed=RANDOM_STATE,
+    low=0.01,
+    high=0.99,
+    min_recall=TARGET_RECALL,
+)
+
+print(
+    f"[train] Best threshold ({THRESHOLD_OBJECTIVE}): {best_threshold:.3f} | "
+    f"Recall: {threshold_metrics['recall']:.4f} | F1: {threshold_metrics['f1_macro']:.4f} | "
+    f"Youden J: {threshold_metrics['youden_j']:.4f} | F_SS: {threshold_metrics['f_ss']:.4f}"
+)
+print(
+    f"[train] Alternate threshold ({alt_objective}): {alt_threshold:.3f} | "
+    f"Recall: {alt_metrics['recall']:.4f} | F1: {alt_metrics['f1_macro']:.4f}"
+)
 
 # ── Final evaluation on held-out test set ──────────────────────────────────
 print("\n[train] Evaluating on test set...")
@@ -182,14 +206,25 @@ all_probs_test  = np.array(all_probs_test)
 all_labels_test = np.array(all_labels_test)
 all_preds_test  = (all_probs_test >= best_threshold).astype(int)
 
+test_threshold_metrics = compute_threshold_metrics(all_labels_test, all_probs_test, best_threshold)
+
 test_results = {
     'disease':   DISEASE,
     'threshold': float(best_threshold),
+    'threshold_objective': THRESHOLD_OBJECTIVE,
+    'threshold_metrics': threshold_metrics,
+    'alternate_thresholds': {
+        alt_objective: {
+            'threshold': float(alt_threshold),
+            'metrics': alt_metrics,
+        }
+    },
     'accuracy':  float(accuracy_score(all_labels_test, all_preds_test)),
     'f1_macro':  float(f1_score(all_labels_test, all_preds_test, average='macro')),
     'recall':    float(recall_score(all_labels_test, all_preds_test, pos_label=1)),
     'precision': float(precision_score(all_labels_test, all_preds_test, pos_label=1, zero_division=0)),
     'auroc':     float(roc_auc_score(all_labels_test, all_probs_test)),
+    'test_threshold_metrics': test_threshold_metrics,
 }
 
 print("\n[train] Test Results:")
@@ -203,6 +238,14 @@ os.makedirs('outputs', exist_ok=True)
 torch.save({
     'model_state_dict': best_model_state,
     'threshold':        best_threshold,
+    'threshold_objective': THRESHOLD_OBJECTIVE,
+    'threshold_metrics': threshold_metrics,
+    'threshold_alternatives': {
+        alt_objective: {
+            'threshold': float(alt_threshold),
+            'metrics': alt_metrics,
+        }
+    },
     'hidden_dims':      HIDDEN_DIMS,
     'input_dim':        INPUT_DIM,
     'test_results':     test_results,

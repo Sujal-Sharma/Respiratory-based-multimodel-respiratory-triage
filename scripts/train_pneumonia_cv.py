@@ -25,6 +25,7 @@ from sklearn.metrics import (
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from models.mlp_classifier import BinaryMLPClassifier, FocalLoss
 from models.embedding_dataset import EmbeddingDataset
+from utils.threshold_optimizer import optimize_threshold
 
 # ══════════════════════════════════════════════════════════════════════════════
 DISEASE         = 'Pneumonia'
@@ -43,6 +44,8 @@ WEIGHT_DECAY   = 1e-4
 TARGET_RECALL  = 0.80
 N_FOLDS        = 5
 RANDOM_STATE   = 42
+THRESHOLD_OBJECTIVE = 'youden_j'   # switch to 'f_ss' if preferred for symmetric sensitivity/specificity
+THRESHOLD_TRIALS    = 200
 # ══════════════════════════════════════════════════════════════════════════════
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -141,15 +144,18 @@ def train_one_fold(train_df, val_df):
     probs_v2  = np.array(probs_v2)
     labels_v2 = np.array(labels_v2)
 
-    best_thresh, best_tf1 = 0.5, 0.0
-    for t in np.arange(0.20, 0.71, 0.01):
-        p = (probs_v2 >= t).astype(int)
-        rec = recall_score(labels_v2, p, pos_label=1, zero_division=0)
-        f1  = f1_score(labels_v2, p, average='macro', zero_division=0)
-        if rec >= TARGET_RECALL and f1 > best_tf1:
-            best_tf1, best_thresh = f1, t
+    best_thresh, best_metrics, _ = optimize_threshold(
+        labels_v2,
+        probs_v2,
+        objective=THRESHOLD_OBJECTIVE,
+        n_trials=THRESHOLD_TRIALS,
+        seed=RANDOM_STATE,
+        low=0.01,
+        high=0.99,
+        min_recall=TARGET_RECALL,
+    )
 
-    return best_state, best_thresh, np.array(probs_v2), np.array(labels_v2)
+    return best_state, best_thresh, np.array(probs_v2), np.array(labels_v2), best_metrics
 
 
 # ── 5-Fold CV ─────────────────────────────────────────────────────────────────
@@ -161,6 +167,7 @@ fold_metrics   = []
 all_probs_oof  = np.zeros(len(df))
 all_labels_oof = np.zeros(len(df), dtype=int)
 thresholds     = []
+threshold_metrics_per_fold = []
 
 print(f"\n[pneumonia_cv] Running {N_FOLDS}-fold CV...")
 for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
@@ -169,10 +176,11 @@ for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
     train_df_fold = df.iloc[train_idx]
     val_df_fold   = df.iloc[val_idx]
 
-    state, thresh, probs, labels = train_one_fold(train_df_fold, val_df_fold)
+    state, thresh, probs, labels, fold_threshold_metrics = train_one_fold(train_df_fold, val_df_fold)
     all_probs_oof[val_idx]  = probs
     all_labels_oof[val_idx] = labels
     thresholds.append(thresh)
+    threshold_metrics_per_fold.append(fold_threshold_metrics)
 
     preds = (probs >= thresh).astype(int)
     m = {
@@ -188,7 +196,16 @@ for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
     print(f"    F1={m['f1_macro']:.3f} | Recall={m['recall']:.3f} | AUROC={m['auroc']:.3f} | Thresh={thresh:.2f}")
 
 # ── Aggregate OOF results ─────────────────────────────────────────────────────
-final_threshold = float(np.median(thresholds))
+final_threshold, final_threshold_metrics, final_threshold_study = optimize_threshold(
+    all_labels_oof,
+    all_probs_oof,
+    objective=THRESHOLD_OBJECTIVE,
+    n_trials=THRESHOLD_TRIALS,
+    seed=RANDOM_STATE,
+    low=0.01,
+    high=0.99,
+    min_recall=TARGET_RECALL,
+)
 oof_preds = (all_probs_oof >= final_threshold).astype(int)
 
 print(f"\n[pneumonia_cv] OOF Results (threshold={final_threshold:.2f}):")
@@ -201,6 +218,10 @@ cv_results = {
     'disease':          DISEASE,
     'evaluation':       '5-fold stratified CV',
     'threshold':        final_threshold,
+    'threshold_objective': THRESHOLD_OBJECTIVE,
+    'threshold_metrics': final_threshold_metrics,
+    'fold_thresholds':   [float(t) for t in thresholds],
+    'fold_threshold_metrics': threshold_metrics_per_fold,
     'accuracy':         float(accuracy_score(all_labels_oof, oof_preds)),
     'f1_macro':         float(f1_score(all_labels_oof, oof_preds, average='macro', zero_division=0)),
     'recall':           float(recall_score(all_labels_oof, oof_preds, pos_label=1, zero_division=0)),
@@ -211,6 +232,8 @@ cv_results = {
     'std_fold_f1':      float(np.std([m['f1_macro'] for m in fold_metrics])),
     'mean_fold_recall': float(np.mean([m['recall'] for m in fold_metrics])),
     'mean_fold_auroc':  float(np.mean([m['auroc'] for m in fold_metrics])),
+    'mean_fold_threshold': float(np.mean(thresholds)),
+    'std_fold_threshold':  float(np.std(thresholds)),
 }
 
 print(f"\n[pneumonia_cv] Mean Fold F1: {cv_results['mean_fold_f1']:.3f} ± {cv_results['std_fold_f1']:.3f}")
@@ -252,6 +275,9 @@ os.makedirs('outputs', exist_ok=True)
 torch.save({
     'model_state_dict': final_state,
     'threshold':        final_threshold,
+    'threshold_objective': THRESHOLD_OBJECTIVE,
+    'threshold_metrics': final_threshold_metrics,
+    'fold_thresholds':   [float(t) for t in thresholds],
     'hidden_dims':      HIDDEN_DIMS,
     'input_dim':        INPUT_DIM,
     'test_results':     cv_results,

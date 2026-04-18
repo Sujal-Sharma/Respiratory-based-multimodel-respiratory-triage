@@ -41,6 +41,8 @@ class COPDAgent:
         # Trained MLP classifier
         ckpt = torch.load(model_path, map_location=device, weights_only=False)
         self.threshold  = ckpt.get('threshold', 0.5)
+        self.threshold_objective = ckpt.get('threshold_objective', 'unknown')
+        self.threshold_metrics = ckpt.get('threshold_metrics', {})
         hidden_dims     = ckpt.get('hidden_dims', [256, 64])
         input_dim       = ckpt.get('input_dim', 768)
 
@@ -50,7 +52,10 @@ class COPDAgent:
         self.classifier.load_state_dict(ckpt['model_state_dict'])
         self.classifier.eval()
 
-        print(f"[COPDAgent] Loaded {model_path} | threshold={self.threshold:.3f}")
+        print(
+            f"[COPDAgent] Loaded {model_path} | threshold={self.threshold:.3f} "
+            f"| objective={self.threshold_objective}"
+        )
 
     def predict(self, audio_path: str) -> dict:
         """

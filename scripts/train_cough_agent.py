@@ -30,6 +30,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from utils.threshold_optimizer import optimize_threshold, compute_threshold_metrics
 os.makedirs('outputs', exist_ok=True)
 os.makedirs('saved_models', exist_ok=True)
 
@@ -38,6 +39,8 @@ EPOCHS       = 60
 BATCH_SIZE   = 64
 LR           = 1e-3
 DROPOUT      = 0.3
+THRESHOLD_OBJECTIVE = 'youden_j'
+THRESHOLD_TRIALS    = 200
 torch.manual_seed(RANDOM_STATE)
 
 # ── Device ───────────────────────────────────────────────────────────────────
@@ -171,14 +174,21 @@ with torch.no_grad():
 val_probs  = np.array(val_probs)
 val_labels = np.array(val_labels)
 
-best_thresh, best_f1 = 0.5, 0.0
-for t in np.arange(0.3, 0.8, 0.01):
-    preds = (val_probs >= t).astype(int)
-    f1    = f1_score(val_labels, preds, average='macro', zero_division=0)
-    if f1 > best_f1:
-        best_f1, best_thresh = f1, t
+best_thresh, threshold_metrics, _ = optimize_threshold(
+    val_labels,
+    val_probs,
+    objective=THRESHOLD_OBJECTIVE,
+    n_trials=THRESHOLD_TRIALS,
+    seed=RANDOM_STATE,
+    low=0.01,
+    high=0.99,
+)
 
-print(f"\nBest threshold: {best_thresh:.2f} (Val Macro F1: {best_f1:.4f})")
+print(
+    f"\nBest threshold ({THRESHOLD_OBJECTIVE}): {best_thresh:.3f} "
+    f"(Val F1: {threshold_metrics['f1_macro']:.4f} | "
+    f"Youden J: {threshold_metrics['youden_j']:.4f} | F_SS: {threshold_metrics['f_ss']:.4f})"
+)
 
 # ── Test evaluation ───────────────────────────────────────────────────────────
 test_probs, test_labels = [], []
@@ -191,6 +201,7 @@ with torch.no_grad():
 test_probs  = np.array(test_probs)
 test_labels = np.array(test_labels)
 test_preds  = (test_probs >= best_thresh).astype(int)
+test_threshold_metrics = compute_threshold_metrics(test_labels, test_probs, best_thresh)
 
 acc  = accuracy_score(test_labels, test_preds)
 f1   = f1_score(test_labels, test_preds, average='macro', zero_division=0)
@@ -211,7 +222,9 @@ print(f"  Confusion Matrix:\n{cm}")
 torch.save({
     'state_dict': model.state_dict(),
     'threshold':  best_thresh,
-    'val_f1':     best_val_f1,
+    'threshold_objective': THRESHOLD_OBJECTIVE,
+    'threshold_metrics': threshold_metrics,
+    'test_threshold_metrics': test_threshold_metrics,
     'config': {'input_dim': 768, 'dropout': DROPOUT},
 }, 'saved_models/cough_opera_mlp.pt')
 print("\nSaved: saved_models/cough_opera_mlp.pt")
